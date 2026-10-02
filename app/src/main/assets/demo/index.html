@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Kryo local game demo</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101417;color:#f4f5f7;font:16px system-ui;display:grid;place-items:center;height:100dvh;overflow:hidden}
+main{width:min(90vw,780px)}h1{font-size:28px;margin:0 0 8px}p{color:#b3bdcd;margin:0 0 16px}
+canvas{display:block;width:100%;height:52vh;border:1px solid #303943;border-radius:12px;background:#171d22}
+button{background:#1a1f24;color:white;border:1px solid #43c5f1;border-radius:7px;padding:10px 20px;margin-top:12px}button:focus{outline:2px solid white}
+</style></head><body><main><h1>Local WebView game demo</h1><p>Move with the D-pad or left stick. A / Enter changes color. B returns to your library.</p>
+<canvas width="780" height="300" tabindex="0" aria-label="Controller demo play area"></canvas><button type="button">Change color</button></main>
+<script>
+const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d'); let x=390,y=150,color=0;
+const palette=['#43c5f1','#62c655','#b69aff'];
+function draw(){ctx.clearRect(0,0,780,300);ctx.strokeStyle='#252e36';for(let n=0;n<780;n+=30){ctx.beginPath();ctx.moveTo(n,0);ctx.lineTo(n,300);ctx.stroke()}for(let n=0;n<300;n+=30){ctx.beginPath();ctx.moveTo(0,n);ctx.lineTo(780,n);ctx.stroke()}ctx.fillStyle=palette[color];ctx.beginPath();ctx.arc(x,y,17,0,2*Math.PI);ctx.fill()}
+function change(){color=(color+1)%palette.length;draw()}
+document.querySelector('button').onclick=change;
+document.addEventListener('keydown',e=>{const moves={ArrowLeft:[-15,0],ArrowRight:[15,0],ArrowUp:[0,-15],ArrowDown:[0,15]};if(moves[e.key]){e.preventDefault();x=Math.max(17,Math.min(763,x+moves[e.key][0]));y=Math.max(17,Math.min(283,y+moves[e.key][1]));draw()}else if(e.key==='Enter'&&e.target!==document.querySelector('button')){e.preventDefault();change()}});
+canvas.addEventListener('pointerdown',e=>{const b=canvas.getBoundingClientRect();x=(e.clientX-b.left)*780/b.width;y=(e.clientY-b.top)*300/b.height;draw()});
+canvas.focus();draw();
+</script></body></html>

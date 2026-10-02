@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.KryoGames" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#101417</item>
+        <item name="android:statusBarColor">#101417</item>
+        <item name="android:navigationBarColor">#101417</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
