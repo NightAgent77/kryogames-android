@@ -915,7 +915,7 @@ private fun FilterTab(filter: LibraryFilter, active: Boolean, m: Metrics, modifi
 private fun OnlineStatus(online: Boolean, m: Metrics) {
     val glow = if (online) KryoColors.Green else KryoColors.Offline
     Row(
-        Modifier.padding(start = m.d(8)).semantics { contentDescription = if (online) "Online" else "Offline" },
+        Modifier.padding(start = m.d(8)).testTag("network_status").semantics { contentDescription = if (online) "Online" else "Offline" },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(m.d(8)),
     ) {

@@ -105,8 +105,8 @@ class LibraryUiTest {
 
     @Test fun addMenuOffersALocalGameFolder() {
         val add = compose.onNodeWithTag("add_game").fetchSemanticsNode().boundsInRoot
-        val online = compose.onNodeWithContentDescription("Online").fetchSemanticsNode().boundsInRoot
-        assertTrue("add sits left of Online (${add.right} vs ${online.left})", add.right <= online.left + 1f)
+        val status = compose.onNodeWithTag("network_status").fetchSemanticsNode().boundsInRoot
+        assertTrue("add sits left of status (${add.right} vs ${status.left})", add.right <= status.left + 1f)
         compose.onNodeWithTag("add_game").performClick()
         compose.onNodeWithTag("add_game_action").assertIsDisplayed()
         compose.onNodeWithText("Add a game").assertIsDisplayed()
