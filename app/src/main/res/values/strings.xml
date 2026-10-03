@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">KryoGames</string>
+    <string name="file_picker_controls_description">Lets the controller move through Android\'s file app while you pick a game folder. It does not read your files.</string>
 </resources>

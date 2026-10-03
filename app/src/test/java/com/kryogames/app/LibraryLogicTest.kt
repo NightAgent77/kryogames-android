@@ -84,6 +84,12 @@ class LibraryLogicTest {
         assertEquals("play/sketch.js", chosen?.scriptPath)
         assertEquals("Sketch", titleFromGameScript("const speed = 1;\n", "sketch.js"))
     }
+    @Test fun fileAppPackagesReceiveControllerHelp() {
+        assertTrue(shouldDriveFileApp("com.android.documentsui"))
+        assertTrue(shouldDriveFileApp("com.google.android.documentsui"))
+        assertTrue(!shouldDriveFileApp("com.kryogames.app"))
+        assertTrue(!shouldDriveFileApp("com.android.systemui"))
+    }
     @Test fun importDirectoryReadsTheGameScriptTitle() {
         val root = File(System.getProperty("java.io.tmpdir"), "kryo-import-" + System.nanoTime())
         assertTrue(root.mkdirs())

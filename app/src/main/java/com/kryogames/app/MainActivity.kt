@@ -10,7 +10,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ControllerActivity() {
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        // The library and in-app folder browser are controller-only.
+        // The library ignores the touchscreen. The system file app is a separate screen.
         if (ev.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) return true
         return super.dispatchTouchEvent(ev)
     }

@@ -1,7 +1,10 @@
 package com.kryogames.app
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
@@ -10,7 +13,14 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -41,10 +51,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** API 33 action. The installed platform stub does not declare this constant. */
+private const val ACTION_ACCESSIBILITY_DETAILS_SETTINGS = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
+
 private sealed interface Overlay {
     data class Options(val id: String) : Overlay
     data class Message(val title: String, val body: String) : Overlay
     data object Browser : Overlay
+    data object FilePrompt : Overlay
 }
 
 /** Demo host. Replace its dataset/callbacks with your repository, not the layout. */
@@ -60,6 +74,59 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
         (DemoGames.all + imported.map { it.asGame() }).map { it.copy(favorite = it.id in favoriteIds) }
     }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
+    var awaitingControls by remember { mutableStateOf(false) }
+    val addGame = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val kept = runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }.isSuccess
+        if (!kept) {
+            overlay = Overlay.Message("Add a game", "Android didn't allow access to that folder.")
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { importTree(context, uri) }
+            when (result) {
+                is ImportResult.Ready -> {
+                    val next = upsertImport(imported, result.game)
+                    imported = next
+                    saveStoredImports(context, next)
+                }
+                is ImportResult.Failed -> overlay = Overlay.Message("Add a game", result.message)
+            }
+        }
+    }
+    fun openFileApp() {
+        overlay = null
+        try {
+            addGame.launch(null)
+        } catch (_: ActivityNotFoundException) {
+            overlay = Overlay.Browser
+        }
+    }
+    fun requestFileControls() {
+        awaitingControls = true
+        overlay = null
+        val component = ComponentName(context, FilePickerControls::class.java)
+        val details = Intent(ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, component)
+        try {
+            context.startActivity(details)
+        } catch (_: ActivityNotFoundException) {
+            runCatching { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        }
+    }
+    val activity = context.findActivity()
+    DisposableEffect(activity, awaitingControls) {
+        if (activity == null) return@DisposableEffect onDispose { }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME || !awaitingControls) return@LifecycleEventObserver
+            awaitingControls = false
+            if (fileControlsEnabled(context)) openFileApp() else overlay = Overlay.FilePrompt
+        }
+        activity.lifecycle.addObserver(observer)
+        onDispose { activity.lifecycle.removeObserver(observer) }
+    }
     fun importChosenFolder(dir: File) {
         overlay = null
         scope.launch {
@@ -91,7 +158,10 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             onToggleFavorite = { game ->
                 favoriteIds = if (game.favorite) favoriteIds - game.id else favoriteIds + game.id
             },
-            onAddGame = { overlay = Overlay.Browser },
+            onAddGame = {
+                if (fileControlsEnabled(context) || skipFilePrompt(context)) openFileApp()
+                else overlay = Overlay.FilePrompt
+            },
             onAspect = { chosen ->
                 aspectName = chosen.name
                 saveAspect(context, chosen)
@@ -110,6 +180,18 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             when (current) {
                 is Overlay.Message -> ModalPanel(current.title, current.body,
                     actions = listOf("Close" to { overlay = null }), onDismiss = { overlay = null })
+                Overlay.FilePrompt -> ModalPanel(
+                    "File app",
+                    "Android's file app opens so you can choose a game folder with the controller. Turn on KryoGames file controls once if the stick or A button does nothing there. The D-pad works either way.",
+                    actions = listOf(
+                        "Open file app" to {
+                            rememberSkipFilePrompt(context)
+                            openFileApp()
+                        },
+                        "Turn on controls" to { requestFileControls() },
+                    ),
+                    onDismiss = { overlay = null },
+                )
                 Overlay.Browser -> FolderBrowser(
                     onChoose = ::importChosenFolder,
                     onDismiss = { overlay = null },
@@ -176,6 +258,12 @@ private fun ModalPanel(title: String, body: String, actions: List<Pair<String, (
     }
 }
 
+private tailrec fun Context.findActivity(): ComponentActivity? = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 private const val SettingsPrefs = "kryo_settings"
 private const val AspectKey = "aspect"
 
@@ -220,6 +308,24 @@ internal fun loadAspect(context: Context): DisplayAspect? =
 
 internal fun saveAspect(context: Context, aspect: DisplayAspect) {
     context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).edit().putString(AspectKey, aspect.name).apply()
+}
+
+private const val SkipFilePromptKey = "skip_file_prompt"
+
+internal fun skipFilePrompt(context: Context): Boolean =
+    context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).getBoolean(SkipFilePromptKey, false)
+
+internal fun rememberSkipFilePrompt(context: Context) {
+    context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).edit().putBoolean(SkipFilePromptKey, true).apply()
+}
+
+internal fun fileControlsEnabled(context: Context): Boolean {
+    val manager = context.getSystemService(AccessibilityManager::class.java) ?: return false
+    val component = ComponentName(context, FilePickerControls::class.java)
+    return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK).any { info ->
+        val service = info.resolveInfo?.serviceInfo ?: return@any false
+        service.packageName == component.packageName && service.name == component.className
+    }
 }
 
 /** Returns a visible error instead of silently failing on unconfigured demo games. */
