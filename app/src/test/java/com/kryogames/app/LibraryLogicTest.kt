@@ -2,6 +2,7 @@ package com.kryogames.app
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.File
 import java.util.Locale
 
 class LibraryLogicTest {
@@ -82,6 +83,22 @@ class LibraryLogicTest {
         assertEquals("play/index.html", chosen?.entryPath)
         assertEquals("play/sketch.js", chosen?.scriptPath)
         assertEquals("Sketch", titleFromGameScript("const speed = 1;\n", "sketch.js"))
+    }
+    @Test fun importDirectoryReadsTheGameScriptTitle() {
+        val root = File(System.getProperty("java.io.tmpdir"), "kryo-import-" + System.nanoTime())
+        assertTrue(root.mkdirs())
+        try {
+            File(root, "index.html").writeText("<script src=\"game.js\"></script>")
+            File(root, "game.js").writeText("// Pocket Maze\nconst x = 1;\n")
+            val result = importDirectory(root)
+            assertTrue(result is ImportResult.Ready)
+            val game = (result as ImportResult.Ready).game
+            assertEquals("Pocket Maze", game.title)
+            assertEquals("index.html", game.entryPath)
+            assertTrue(game.treeUri.startsWith("file:"))
+        } finally {
+            root.deleteRecursively()
+        }
     }
     @Test fun folderWithoutBothFilesIsNotAGame() {
         assertNull(chooseGame(listOf(FolderEntry("index.html"))) { "" })

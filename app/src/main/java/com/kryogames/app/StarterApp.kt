@@ -11,8 +11,6 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -41,10 +39,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private sealed interface Overlay {
     data class Options(val id: String) : Overlay
     data class Message(val title: String, val body: String) : Overlay
+    data object Browser : Overlay
 }
 
 /** Demo host. Replace its dataset/callbacks with your repository, not the layout. */
@@ -60,17 +60,10 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
         (DemoGames.all + imported.map { it.asGame() }).map { it.copy(favorite = it.id in favoriteIds) }
     }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
-    val addGame = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val kept = runCatching {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }.isSuccess
-        if (!kept) {
-            overlay = Overlay.Message("Add a game", "Android didn't allow access to that folder.")
-            return@rememberLauncherForActivityResult
-        }
+    fun importChosenFolder(dir: File) {
+        overlay = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) { importTree(context, uri) }
+            val result = withContext(Dispatchers.IO) { importDirectory(dir) }
             when (result) {
                 is ImportResult.Ready -> {
                     val next = upsertImport(imported, result.game)
@@ -98,7 +91,7 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             onToggleFavorite = { game ->
                 favoriteIds = if (game.favorite) favoriteIds - game.id else favoriteIds + game.id
             },
-            onAddGame = { addGame.launch(null) },
+            onAddGame = { overlay = Overlay.Browser },
             onAspect = { chosen ->
                 aspectName = chosen.name
                 saveAspect(context, chosen)
@@ -117,6 +110,10 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             when (current) {
                 is Overlay.Message -> ModalPanel(current.title, current.body,
                     actions = listOf("Close" to { overlay = null }), onDismiss = { overlay = null })
+                Overlay.Browser -> FolderBrowser(
+                    onChoose = ::importChosenFolder,
+                    onDismiss = { overlay = null },
+                )
                 is Overlay.Options -> {
                     val game = games.first { it.id == current.id }
                     ModalPanel(game.title, if (game.platform == GamePlatform.WEB) "Web game" else "Android game",
@@ -231,12 +228,17 @@ fun launchGame(context: Context, game: Game): String? {
     val entry = game.contentEntry
     if (tree != null && entry != null) {
         if (!canReadTree(context, tree)) return "KryoGames no longer has access to ${game.title}. Add that folder again."
-        context.startActivity(
-            Intent(context, WebGameActivity::class.java)
-                .putExtra(WebGameActivity.EXTRA_TREE, tree)
-                .putExtra(WebGameActivity.EXTRA_ENTRY, entry)
-                .putExtra(WebGameActivity.EXTRA_TITLE, game.title),
-        )
+        val parsed = Uri.parse(tree)
+        val launch = Intent(context, WebGameActivity::class.java)
+            .putExtra(WebGameActivity.EXTRA_ENTRY, entry)
+            .putExtra(WebGameActivity.EXTRA_TITLE, game.title)
+        if (parsed.scheme == "file") {
+            val path = parsed.path ?: return "KryoGames no longer has access to ${game.title}. Add that folder again."
+            launch.putExtra(WebGameActivity.EXTRA_DIRECTORY, path)
+        } else {
+            launch.putExtra(WebGameActivity.EXTRA_TREE, tree)
+        }
+        context.startActivity(launch)
         return null
     }
     return when (game.platform) {

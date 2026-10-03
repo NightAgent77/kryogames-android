@@ -2,11 +2,14 @@ package com.kryogames.app
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
 import android.webkit.WebResourceResponse
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.ArrayDeque
 import java.util.Locale
 
@@ -216,7 +219,118 @@ internal fun saveStoredImports(context: Context, games: List<StoredImport>) {
 
 internal fun canReadTree(context: Context, treeUri: String): Boolean {
     val uri = Uri.parse(treeUri)
+    if (uri.scheme == "file") {
+        val path = uri.path ?: return false
+        val dir = File(path)
+        return dir.isDirectory && dir.list() != null
+    }
     return context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+}
+
+internal fun canBrowseDeviceFolders(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+
+/** Volumes the folder browser can open. Unreadable roots are left out. */
+internal fun storageRoots(): List<File> {
+    val found = LinkedHashMap<String, File>()
+    fun add(file: File?) {
+        val dir = file ?: return
+        if (dir.list() == null) return
+        val key = runCatching { dir.canonicalPath }.getOrDefault(dir.absolutePath)
+        found.putIfAbsent(key, dir)
+    }
+    add(Environment.getExternalStorageDirectory())
+    File("/storage").listFiles()?.forEach { volume ->
+        if (volume.name == "self" || volume.name == "emulated") return@forEach
+        add(volume)
+    }
+    return found.values.sortedBy { it.name.lowercase(Locale.ROOT) }
+}
+
+internal fun childDirectories(dir: File): List<File> =
+    dir.listFiles()
+        ?.asSequence()
+        ?.filter { it.isDirectory && !it.name.startsWith(".") }
+        ?.sortedBy { it.name.lowercase(Locale.ROOT) }
+        ?.toList()
+        ?: emptyList()
+
+/** Parent folder inside a storage volume, or null when the browser should show the volume list. */
+internal fun folderAbove(dir: File): File? {
+    val parent = dir.parentFile ?: return null
+    val path = parent.absolutePath.trimEnd('/')
+    if (path.isEmpty() || path == "/" || path == "/storage" || path == "/storage/emulated") return null
+    return parent
+}
+
+internal fun folderLabel(dir: File): String {
+    val path = dir.absolutePath.trimEnd('/')
+    if (path.endsWith("/emulated/0") || path == "/sdcard") return "Internal storage"
+    return dir.name.ifBlank { path }
+}
+
+internal fun importDirectory(root: File): ImportResult {
+    val rootCanon = runCatching { root.canonicalFile }.getOrNull()
+        ?: return ImportResult.Failed("Couldn't read that folder. Pick the folder that holds the game.")
+    if (rootCanon.list() == null) {
+        return ImportResult.Failed("Couldn't read that folder. Pick the folder that holds the game.")
+    }
+    val entries = ArrayList<FolderEntry>()
+    val queue = ArrayDeque<File>()
+    queue.add(rootCanon)
+    var seen = 0
+    while (queue.isNotEmpty() && seen < 500) {
+        val dir = queue.removeFirst()
+        val children = dir.listFiles() ?: continue
+        for (child in children) {
+            if (child.name.startsWith(".") || child.name == "node_modules") continue
+            val canonical = runCatching { child.canonicalFile }.getOrNull() ?: continue
+            val relative = runCatching {
+                rootCanon.toPath().relativize(canonical.toPath()).toString().replace('\\', '/')
+            }.getOrNull() ?: continue
+            if (relative.isEmpty() || relative == "." || relative.startsWith("..")) continue
+            seen++
+            if (canonical.isDirectory) {
+                if (relative.count { it == '/' } < 4) queue.add(canonical)
+            } else {
+                entries.add(FolderEntry(relative))
+            }
+        }
+    }
+    if (entries.isEmpty()) {
+        return ImportResult.Failed("Couldn't read that folder. Pick the folder that holds the game.")
+    }
+    val chosen = chooseGame(entries) { path ->
+        val file = File(rootCanon, path)
+        if (!file.isFile) null else runCatching { file.bufferedReader().use { it.readText().take(200_000) } }.getOrNull()
+    } ?: return ImportResult.Failed("That folder needs an HTML file and a JavaScript file together.")
+    val scriptFile = File(rootCanon, chosen.scriptPath)
+    val script = runCatching { scriptFile.bufferedReader().use { it.readText().take(16_000) } }.getOrNull().orEmpty()
+    val title = titleFromGameScript(script, chosen.scriptPath.substringAfterLast('/'))
+    val uri = rootCanon.toURI().toString()
+    val id = "local-" + uri.hashCode().toUInt().toString(16)
+    return ImportResult.Ready(StoredImport(id, uri, title, chosen.entryPath))
+}
+
+internal class DirectoryPathHandler(root: File) : WebViewAssetLoader.PathHandler {
+    private val rootPath: String = runCatching { root.canonicalFile.path }.getOrDefault(root.absolutePath)
+
+    override fun handle(path: String): WebResourceResponse? {
+        val relative = normalizeRequestPath(path) ?: return null
+        val file = File(rootPath, relative)
+        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return null
+        val childPath = canonical.path
+        if (childPath != rootPath && !childPath.startsWith(rootPath + File.separator)) return null
+        if (!canonical.isFile) return null
+        val stream = runCatching { canonical.inputStream() }.getOrNull() ?: return null
+        val mime = mimeFor(relative)
+        val encoding = if (mime.startsWith("text/") || mime == "application/javascript" || mime == "application/json") {
+            "utf-8"
+        } else {
+            null
+        }
+        return WebResourceResponse(mime, encoding, stream)
+    }
 }
 
 internal class TreePathHandler(context: Context, treeUri: Uri) : WebViewAssetLoader.PathHandler {

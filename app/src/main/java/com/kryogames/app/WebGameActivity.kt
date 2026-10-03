@@ -13,6 +13,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewAssetLoader
+import java.io.File
 
 /** Local HTML/JS games run on an HTTPS asset origin; no file:// permissions. */
 class WebGameActivity : ControllerActivity() {
@@ -32,16 +33,28 @@ class WebGameActivity : ControllerActivity() {
             }
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val directory = intent.getStringExtra(EXTRA_DIRECTORY)
         val tree = intent.getStringExtra(EXTRA_TREE)
         val entry = intent.getStringExtra(EXTRA_ENTRY)
-        val loader = if (tree != null) {
+        fun localUrl(relative: String) =
+            "https://appassets.androidplatform.net/local/${relative.split("/").joinToString("/") { Uri.encode(it) }}"
+        val loader = if (directory != null) {
+            val root = File(directory)
+            val relative = entry?.let(::normalizeRequestPath)
+            if (relative == null || !root.isDirectory) {
+                finish(); return
+            }
+            WebViewAssetLoader.Builder()
+                .addPathHandler("/local/", DirectoryPathHandler(root))
+                .build() to localUrl(relative)
+        } else if (tree != null) {
             val relative = entry?.let(::normalizeRequestPath)
             if (relative == null) {
                 finish(); return
             }
             WebViewAssetLoader.Builder()
                 .addPathHandler("/local/", TreePathHandler(this, Uri.parse(tree)))
-                .build() to "https://appassets.androidplatform.net/local/${relative.split("/").joinToString("/") { Uri.encode(it) }}"
+                .build() to localUrl(relative)
         } else {
             val path = intent.getStringExtra(EXTRA_ASSET) ?: ""
             if (!path.matches(Regex("[A-Za-z0-9_./-]+")) || path.startsWith("/") || path.contains("..")) {
@@ -105,6 +118,7 @@ class WebGameActivity : ControllerActivity() {
     companion object {
         const val EXTRA_ASSET = "asset_path"
         const val EXTRA_TREE = "content_tree"
+        const val EXTRA_DIRECTORY = "content_directory"
         const val EXTRA_ENTRY = "content_entry"
         const val EXTRA_TITLE = "game_title"
     }

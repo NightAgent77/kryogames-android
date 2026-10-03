@@ -179,6 +179,9 @@ fun LibraryScreen(
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchHadFocus by remember { mutableStateOf(false) }
     var searchRequest by remember { mutableIntStateOf(0) }
+    var railFocusNonce by remember { mutableIntStateOf(0) }
+    val railFocus = remember { List(4) { FocusRequester() } }
+    val addFocus = remember { FocusRequester() }
     var firstFocusPlaced by remember { mutableStateOf(false) }
     var previousModalOpen by remember { mutableStateOf(false) }
     var previousChoicesOpen by remember { mutableStateOf(false) }
@@ -219,10 +222,14 @@ fun LibraryScreen(
         actionGameId = null
         showingInfo = false
     }
+    fun toggleSidebar() {
+        sidebarOpen = !sidebarOpen
+        if (sidebarOpen) railFocusNonce++
+    }
 
     val handleAction by rememberUpdatedState<(ControllerAction) -> Unit> { action ->
         if (!modalOpen && actionGameId == null && !settingsOpen && !profileMenuOpen && !addMenuOpen) when (action) {
-            ControllerAction.MENU -> sidebarOpen = !sidebarOpen
+            ControllerAction.MENU -> toggleSidebar()
             ControllerAction.SEARCH -> searchRequest++
             ControllerAction.OPTIONS -> selectedGame?.let(::openGameChoices)
             ControllerAction.PREVIOUS_TAB -> section = "Library"
@@ -254,6 +261,16 @@ fun LibraryScreen(
         }
         previousModalOpen = modalOpen
         previousChoicesOpen = choicesOpen
+    }
+    var railWasOpen by remember { mutableStateOf(sidebarOpen) }
+    LaunchedEffect(sidebarOpen, settingsOpen, profileMenuOpen, addMenuOpen, actionGameId, showingInfo, modalOpen, section) {
+        val closed = railWasOpen && !sidebarOpen
+        railWasOpen = sidebarOpen
+        if (!closed) return@LaunchedEffect
+        if (settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || showingInfo || modalOpen) return@LaunchedEffect
+        withFrameNanos { }
+        if (section == "Friends" || ids.isEmpty()) menuFocus.requestFocus()
+        else cardFocus[lastFocusedGameId]?.requestFocus() ?: cardFocus[ids.first()]?.requestFocus()
     }
     BackHandler(enabled = !modalOpen && (settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || section == "Friends" || query.isNotEmpty() || sidebarOpen)) {
         when {
@@ -326,6 +343,8 @@ fun LibraryScreen(
                         section = section,
                         settingsOpen = settingsOpen,
                         translucent = showingInfo,
+                        focus = railFocus,
+                        focusRequest = railFocusNonce,
                         onLibrary = {
                             section = "Library"
                             profileMenuOpen = false
@@ -375,7 +394,7 @@ fun LibraryScreen(
                                     profileMenuOpen = false
                                 },
                                 onQuery = { query = it },
-                                onToggleMenu = { sidebarOpen = !sidebarOpen },
+                                onToggleMenu = { toggleSidebar() },
                                 onNotifications = onNotifications,
                                 onProfile = { profileMenuOpen = !profileMenuOpen },
                                 onProfilePlaced = { rememberAnchor("profile", it) },
@@ -401,6 +420,7 @@ fun LibraryScreen(
                                             m,
                                             Modifier.focusRequester(filterFocus.getValue(tab)).focusProperties {
                                                 down = ids.firstOrNull()?.let { cardFocus.getValue(it) } ?: FocusRequester.Default
+                                                if (tab == LibraryFilter.entries.last()) right = addFocus
                                             },
                                         ) { filterName = tab.name }
                                     }
@@ -412,6 +432,11 @@ fun LibraryScreen(
                                         FocusBox(
                                             Modifier.padding(start = m.d(10)).size(m.d(32).coerceAtLeast(36.dp))
                                                 .onGloballyPositioned { rememberAnchor("add-game", it) }
+                                                .focusRequester(addFocus)
+                                                .focusProperties {
+                                                    left = filterFocus.getValue(LibraryFilter.entries.last())
+                                                    down = ids.firstOrNull()?.let { cardFocus.getValue(it) } ?: FocusRequester.Cancel
+                                                }
                                                 .testTag("add_game"),
                                             "Add",
                                             outlined = true,
@@ -473,7 +498,12 @@ fun LibraryScreen(
                                                     val neighbors = Modifier.focusProperties {
                                                         fun neighbor(dx: Int, dy: Int) = gridNeighbor(index, visible.size, columns, dx, dy)
                                                             ?.let { cardFocus.getValue(visible[it].id) }
-                                                        left = neighbor(-1, 0) ?: FocusRequester.Default
+                                                        val railIndex = when {
+                                                            settingsOpen -> 3
+                                                            section == "Friends" -> 1
+                                                            else -> 0
+                                                        }
+                                                        left = neighbor(-1, 0) ?: if (sidebarOpen) railFocus[railIndex] else menuFocus
                                                         right = neighbor(1, 0) ?: FocusRequester.Cancel
                                                         up = neighbor(0, -1) ?: filterFocus.getValue(filter)
                                                         down = neighbor(0, 1) ?: FocusRequester.Cancel
@@ -588,6 +618,8 @@ private fun Sidebar(
     section: String,
     settingsOpen: Boolean,
     translucent: Boolean,
+    focus: List<FocusRequester>,
+    focusRequest: Int,
     onLibrary: () -> Unit,
     onFriends: () -> Unit,
     onDownloads: () -> Unit,
@@ -598,30 +630,44 @@ private fun Sidebar(
         enter = fadeIn(motionIn()) + expandHorizontally(motionIn(), expandFrom = Alignment.Start),
         exit = fadeOut(motionOut()) + shrinkHorizontally(motionOut(), shrinkTowards = Alignment.Start),
     ) {
+        data class Item(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
+        val targets = listOf(
+            Item("Library", Icons.Outlined.SportsEsports, section == "Library" || section == "Discover", onLibrary),
+            Item("Friends", Icons.Outlined.Group, section == "Friends", onFriends),
+            Item("Downloads", Icons.Outlined.FileDownload, false, onDownloads),
+            Item("Settings", Icons.Outlined.Settings, settingsOpen, onSettings),
+        )
+        LaunchedEffect(focusRequest) {
+            if (focusRequest == 0) return@LaunchedEffect
+            withFrameNanos { }
+            val index = targets.indexOfFirst { it.active }.coerceAtLeast(0)
+            focus.getOrNull(index)?.requestFocus()
+        }
         Column(
             Modifier.width(m.d(78)).fillMaxHeight()
                 .background(if (translucent) KryoColors.Rail.copy(alpha = 0.42f) else KryoColors.Rail)
                 .padding(top = m.d(20)),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            data class Item(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
-            val targets = listOf(
-                Item("Library", Icons.Outlined.SportsEsports, section == "Library" || section == "Discover", onLibrary),
-                Item("Friends", Icons.Outlined.Group, section == "Friends", onFriends),
-                Item("Downloads", Icons.Outlined.FileDownload, false, onDownloads),
-                Item("Settings", Icons.Outlined.Settings, settingsOpen, onSettings),
-            )
-            targets.forEach { item ->
+            targets.forEachIndexed { index, item ->
                 val tint by androidx.compose.animation.animateColorAsState(
                     if (item.active) KryoColors.Accent else KryoColors.Muted,
                     tween(MotionIn, easing = MotionEase),
                     label = "railTint",
                 )
-                Box {
-                    FocusBox(Modifier.size(m.d(48).coerceAtLeast(40.dp)), description = item.label, filled = item.active, onClick = item.action) {
-                        Icon(item.icon, null, tint = tint, modifier = Modifier.size(m.d(24)))
-                    }
-                    if (item.active) Box(Modifier.align(Alignment.CenterStart).width(1.dp).height(m.d(40)).background(KryoColors.Accent))
+                FocusBox(
+                    Modifier.size(m.d(48).coerceAtLeast(40.dp)).focusRequester(focus[index]).focusProperties {
+                        up = focus.getOrElse(index - 1) { FocusRequester.Cancel }
+                        down = focus.getOrElse(index + 1) { FocusRequester.Cancel }
+                        left = FocusRequester.Cancel
+                        right = FocusRequester.Default
+                    },
+                    description = item.label,
+                    filled = item.active,
+                    marked = item.active,
+                    onClick = item.action,
+                ) {
+                    Icon(item.icon, null, tint = tint, modifier = Modifier.size(m.d(24)))
                 }
                 Spacer(Modifier.height(m.d(20)))
             }
@@ -1033,6 +1079,7 @@ internal fun FocusBox(
     description: String,
     outlined: Boolean = false,
     filled: Boolean = false,
+    marked: Boolean = false,
     onClick: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -1040,10 +1087,11 @@ internal fun FocusBox(
     val shape = RoundedCornerShape(7.dp)
     val enabled = LocalUiEnabled.current
     val frosted = LocalFrosted.current
-    val showFill = filled || outlined || focused
+    val showFill = filled || outlined || focused || marked
     val border by androidx.compose.animation.animateColorAsState(
         when {
             focused -> Color.White
+            marked -> KryoColors.Accent
             frosted && showFill -> Color.White.copy(alpha = 0.22f)
             outlined -> KryoColors.Border
             else -> Color.Transparent
@@ -1053,6 +1101,7 @@ internal fun FocusBox(
     )
     val fill by androidx.compose.animation.animateColorAsState(
         when {
+            marked -> KryoColors.Accent.copy(alpha = 0.22f)
             frosted && showFill -> Color.White.copy(alpha = 0.16f)
             showFill -> KryoColors.Surface
             else -> Color.Transparent
@@ -1063,7 +1112,7 @@ internal fun FocusBox(
     Box(
         modifier.onFocusChanged { focused = it.isFocused }.clip(shape)
             .background(fill)
-            .border(if (focused) 2.dp else 1.dp, border, shape)
+            .border(if (focused || marked) 2.dp else 1.dp, border, shape)
             .focusProperties { canFocus = enabled }
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description },
@@ -1125,33 +1174,51 @@ private fun GameChoiceLayer(
             exit = fadeOut(motionOut()) + scaleOut(targetScale = 0.96f, animationSpec = motionOut(), transformOrigin = origin),
         ) {
             val playFocus = remember { FocusRequester() }
+            val infoFocus = remember { FocusRequester() }
             val shownGame = current ?: return@AnimatedVisibility
             LaunchedEffect(shownGame.id) {
                 withFrameNanos { }
                 playFocus.requestFocus()
             }
-            Row(
-                Modifier.width(menuWidth).height(IntrinsicSize.Min)
+            Column(
+                Modifier.width(menuWidth)
                     .onSizeChanged(onMenuSize)
                     .shadow(16.dp, RoundedCornerShape(10.dp))
                     .clip(RoundedCornerShape(10.dp))
                     .background(KryoColors.Surface)
                     .border(1.dp, KryoColors.Border, RoundedCornerShape(10.dp))
-                    .pointerInput(Unit) { detectTapGestures { } },
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
             ) {
-                if (!place.placeOnLeft) Box(Modifier.width(3.dp).fillMaxHeight().background(KryoColors.Accent))
-                Column(Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 8.dp)) {
-                    Text(shownGame.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(6.dp))
-                    FocusBox(Modifier.fillMaxWidth().height(34.dp).focusRequester(playFocus).testTag("play_action"), "Play", outlined = true, onClick = { onPlay(shownGame) }) {
-                        Text("Play", color = KryoColors.Text, fontSize = 13.sp)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    FocusBox(Modifier.fillMaxWidth().height(34.dp).testTag("info_action"), "Info", outlined = true, onClick = onInfo) {
-                        Text("Info", color = KryoColors.Text, fontSize = 13.sp)
-                    }
+                Text(shownGame.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(6.dp))
+                FocusBox(
+                    Modifier.fillMaxWidth().height(34.dp).focusRequester(playFocus).focusProperties {
+                        down = infoFocus
+                        up = FocusRequester.Cancel
+                        left = FocusRequester.Cancel
+                        right = FocusRequester.Cancel
+                    }.testTag("play_action"),
+                    "Play",
+                    outlined = true,
+                    onClick = { onPlay(shownGame) },
+                ) {
+                    Text("Play", color = KryoColors.Text, fontSize = 13.sp)
                 }
-                if (place.placeOnLeft) Box(Modifier.width(3.dp).fillMaxHeight().background(KryoColors.Accent))
+                Spacer(Modifier.height(6.dp))
+                FocusBox(
+                    Modifier.fillMaxWidth().height(34.dp).focusRequester(infoFocus).focusProperties {
+                        up = playFocus
+                        down = FocusRequester.Cancel
+                        left = FocusRequester.Cancel
+                        right = FocusRequester.Cancel
+                    }.testTag("info_action"),
+                    "Info",
+                    outlined = true,
+                    onClick = onInfo,
+                ) {
+                    Text("Info", color = KryoColors.Text, fontSize = 13.sp)
+                }
             }
         }
     }
@@ -1179,24 +1246,58 @@ private fun GameInfoView(
             }
             Spacer(Modifier.height(m.d(8)))
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                val stack = maxWidth < 520.dp
-                if (stack) {
-                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
-                        GameInfoArt(game, Modifier.fillMaxWidth().weight(1f))
-                        GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                if (classic) {
+                    val ratio = 735f / 575f
+                    val sideBySide = maxWidth >= 440.dp
+                    if (sideBySide) {
+                        val roomForArt = (maxWidth - gap - 200.dp).coerceAtLeast(120.dp)
+                        val maxArtW = min(maxWidth.value * 0.36f, roomForArt.value)
+                        val maxArtH = maxHeight.value * 0.88f
+                        val artW = min(maxArtW, maxArtH * ratio).dp
+                        val artH = (artW.value / ratio).dp
+                        Row(
+                            Modifier.fillMaxSize().clipToBounds(),
+                            horizontalArrangement = Arrangement.spacedBy(gap),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            GameInfoArt(game, Modifier.size(artW, artH))
+                            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.CenterStart) {
+                                GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                            }
+                        }
+                    } else {
+                        val maxArtH = maxHeight.value * 0.36f
+                        val artW = min(maxWidth.value * 0.72f, maxArtH * ratio).dp
+                        val artH = (artW.value / ratio).dp
+                        Column(
+                            Modifier.fillMaxSize().clipToBounds(),
+                            verticalArrangement = Arrangement.spacedBy(gap),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            GameInfoArt(game, Modifier.size(artW, artH))
+                            GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                        }
                     }
                 } else {
-                    Row(
-                        Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(gap),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        GameInfoArt(
-                            game,
-                            Modifier.fillMaxHeight().aspectRatio(735f / 575f, matchHeightConstraintsFirst = true),
-                        )
-                        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+                    val stack = maxWidth < 520.dp
+                    if (stack) {
+                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                            GameInfoArt(game, Modifier.fillMaxWidth().weight(1f))
                             GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                        }
+                    } else {
+                        Row(
+                            Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(gap),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            GameInfoArt(
+                                game,
+                                Modifier.fillMaxHeight().aspectRatio(735f / 575f, matchHeightConstraintsFirst = true),
+                            )
+                            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+                                GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                            }
                         }
                     }
                 }
