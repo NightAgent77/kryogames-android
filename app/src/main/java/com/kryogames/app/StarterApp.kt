@@ -225,8 +225,7 @@ private fun ModalPanel(title: String, body: String, actions: List<Pair<String, (
         launch {
             scale.animateTo(1f, tween(200))
         }
-        withFrameNanos { }
-        focus.firstOrNull()?.requestFocus()
+        focus.firstOrNull()?.bringIntoFocus()
     }
     Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha.value }.background(Color.Black.copy(alpha = 0.75f * alpha.value))
         .pointerInput(Unit) { detectTapGestures { onDismiss() } }, contentAlignment = Alignment.Center) {
