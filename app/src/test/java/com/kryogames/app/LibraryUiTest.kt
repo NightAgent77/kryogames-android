@@ -129,7 +129,7 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithTag("app_details").assertIsDisplayed()
         compose.onNodeWithText("APP DETAILS").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.3").assertIsDisplayed()
+        compose.onNodeWithContentDescription("App version 0.0.3 (fixed)").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
         compose.onNodeWithTag("app_details").assertDoesNotExist()
     }

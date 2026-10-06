@@ -22,7 +22,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -1203,7 +1202,6 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
                     true
                 } else true
             }
-            .focusable()
             .bringIntoViewRequester(bringIntoView)
             .hoverable(interaction)
             .onFocusChanged {
@@ -1307,7 +1305,7 @@ internal fun FocusBox(
                 onClick()
                 true
             } else true
-        }.focusable().onFocusChanged { focused = it.isFocused }.clip(shape)
+        }.onFocusChanged { focused = it.isFocused }.clip(shape)
             .background(fill)
             .border(if (focused || marked) 2.dp else 1.dp, border, shape)
             .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
@@ -1851,7 +1849,6 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, onFocused: () -> Unit, o
                     true
                 } else true
             }
-            .focusable()
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocused()
@@ -1901,6 +1898,7 @@ private fun ImmersiveLibrary(
     val playFocus = remember { FocusRequester() }
     val detailsFocus = remember { FocusRequester() }
     val filterFocus = remember { FocusRequester() }
+    var carouselFocused by remember { mutableStateOf(false) }
     val game = games.getOrNull(index)
     Column(Modifier.fillMaxSize()) {
         Box(
@@ -1921,10 +1919,11 @@ private fun ImmersiveLibrary(
                     }
                     else -> false
                 }
-            }.focusable().focusProperties {
+            }.onFocusChanged { carouselFocused = it.isFocused }.focusProperties {
                 up = upFocus
                 down = if (game == null) filterFocus else playFocus
-            }.clickable(role = Role.Button, onClick = { game?.let(onPlay) })
+            }.border(if (carouselFocused) 3.dp else 0.dp, Color.White)
+                .clickable(role = Role.Button, onClick = { game?.let(onPlay) })
                 .semantics { contentDescription = game?.let { "Selected ${it.title}" } ?: "No games" },
             contentAlignment = Alignment.Center,
         ) {
@@ -2045,10 +2044,10 @@ private fun ImmersiveLibrary(
                         onCycleFilter()
                         true
                     } else true
-                }.focusable().focusProperties {
+                }.onFocusChanged { filterFocused = it.isFocused }.focusProperties {
                     up = if (game == null) carouselFocus else playFocus
                     right = if (game == null) FocusRequester.Cancel else detailsFocus
-                }.onFocusChanged { filterFocused = it.isFocused }
+                }
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF121A24).copy(alpha = 0.92f))
                     .border(if (filterFocused) 2.dp else 1.dp, if (filterFocused) Color.White else Color.White.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
@@ -2084,7 +2083,7 @@ private fun ImmersiveAction(
                 onClick()
                 true
             } else true
-        }.focusable().height(44.dp)
+        }.height(44.dp)
             .onFocusChanged { focused = it.isFocused }
             .clip(shape)
             .background(if (filled) KryoColors.Accent else Color.White.copy(alpha = 0.08f))
