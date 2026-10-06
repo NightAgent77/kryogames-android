@@ -11,13 +11,20 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlin.math.abs
 
-enum class ControllerAction { OPTIONS, SEARCH, PREVIOUS_TAB, NEXT_TAB, MENU }
+enum class ControllerAction { OPTIONS, SEARCH, PREVIOUS_TAB, NEXT_TAB, MENU, LEFT, RIGHT, UP, DOWN, CONFIRM }
 
-/** A/Enter activate the ACTUALLY focused Compose control, not a remembered game. */
+internal tailrec fun android.content.Context.findControllerActivity(): ControllerActivity? = when (this) {
+    is ControllerActivity -> this
+    is android.content.ContextWrapper -> baseContext.findControllerActivity()
+    else -> null
+}
+
+/** Direction and confirm move an explicit library cursor. Compose focus is not required. */
 open class ControllerActivity : ComponentActivity() {
     val controllerActions = MutableSharedFlow<ControllerAction>(
         extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
+    var libraryOwnsDirections = false
     protected open val useLibraryShortcuts = true
     private val handler = Handler(Looper.getMainLooper())
     private var heldDirection: Int? = null
@@ -45,18 +52,45 @@ open class ControllerActivity : ComponentActivity() {
         window.superDispatchKeyEvent(mapped)
     }
 
+    private fun directionAction(keyCode: Int): ControllerAction? = when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_LEFT -> ControllerAction.LEFT
+        KeyEvent.KEYCODE_DPAD_RIGHT -> ControllerAction.RIGHT
+        KeyEvent.KEYCODE_DPAD_UP -> ControllerAction.UP
+        KeyEvent.KEYCODE_DPAD_DOWN -> ControllerAction.DOWN
+        else -> null
+    }
+
+    private fun handleOwnedKey(keyCode: Int, event: KeyEvent): Boolean {
+        if (!libraryOwnsDirections) return false
+        directionAction(keyCode)?.let { action ->
+            if (event.action == KeyEvent.ACTION_DOWN) controllerActions.tryEmit(action)
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_A || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) controllerActions.tryEmit(ControllerAction.CONFIRM)
+            return true
+        }
+        return false
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (handleOwnedKey(event.keyCode, event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (handleOwnedKey(keyCode, event)) return true
         if (keyCode == KeyEvent.KEYCODE_BUTTON_A) { activateFocusedControl(event); return true }
         if (keyCode == KeyEvent.KEYCODE_BUTTON_B) return true
         shortcut(keyCode)?.let { action ->
             if (event.repeatCount == 0) controllerActions.tryEmit(action)
             return true
         }
-        // Compose handles physical D-pad, keyboard arrows, Tab and Enter normally.
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (handleOwnedKey(keyCode, event)) return true
         if (keyCode == KeyEvent.KEYCODE_BUTTON_A) { activateFocusedControl(event); return true }
         if (keyCode == KeyEvent.KEYCODE_BUTTON_B) { onBackPressedDispatcher.onBackPressed(); return true }
         if (shortcut(keyCode) != null) return true
@@ -68,7 +102,8 @@ open class ControllerActivity : ComponentActivity() {
             return super.dispatchGenericMotionEvent(event)
         fun axis(code: Int): Float {
             val value = event.getAxisValue(code)
-            val deadZone = maxOf(0.55f, event.device?.getMotionRange(code, event.source)?.flat ?: 0f)
+            val flat = event.device?.getMotionRange(code, event.source)?.flat ?: 0f
+            val deadZone = if (flat in 0.05f..0.35f) flat else 0.25f
             return if (abs(value) > deadZone) value else 0f
         }
         val x = listOf(axis(MotionEvent.AXIS_X), axis(MotionEvent.AXIS_HAT_X)).maxBy { abs(it) }
@@ -90,6 +125,10 @@ open class ControllerActivity : ComponentActivity() {
     }
 
     private fun sendDirection(code: Int) {
+        if (libraryOwnsDirections) {
+            directionAction(code)?.let { controllerActions.tryEmit(it) }
+            return
+        }
         val now = SystemClock.uptimeMillis()
         window.superDispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
         window.superDispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))

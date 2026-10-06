@@ -33,8 +33,26 @@ class LibraryUiTest {
         compose.waitForIdle()
     }
 
+    @Test fun dpadAndStickDirectionsMoveFocus() {
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.onNodeWithTag("add_game").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_LEFT)
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_UP)
+        compose.onNodeWithTag("section_library").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_LEFT)
+        compose.onNodeWithTag("section_discover").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithTag("play_action").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("info_action").assertIsSelected()
+    }
+
     @Test fun renderAndActivateActuallyFocusedGame() {
-        compose.onNodeWithTag("game_maze-ops").assertIsFocused()
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
         compose.runOnIdle {
             val view = compose.activity.window.decorView
             val image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
@@ -58,23 +76,22 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Kryo Games logo").assertDoesNotExist()
         compose.onNodeWithTag("network_status").assertDoesNotExist()
         compose.onNodeWithTag("search_button").performClick()
-        compose.onNodeWithTag("search_bar").assertIsDisplayed()
-        compose.onNodeWithTag("search_field").assertDoesNotExist()
-        compose.onNodeWithTag("search_bar").performClick()
+        compose.onNodeWithTag("search_field").assertIsDisplayed().assertIsSelected()
+        compose.onNodeWithTag("search_bar").assertDoesNotExist()
+        controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.onNodeWithTag("search_field").assertIsSelected()
         compose.onNodeWithTag("search_field").performTextInput("does-not-exist")
         compose.onNodeWithText("No games match your search or filter.").assertExists()
-        compose.onNodeWithTag("search_field").assertIsFocused()
-        compose.onNodeWithTag("search_button").performClick()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithTag("search_field").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_B)
         compose.onNodeWithTag("search_field").assertDoesNotExist()
-        compose.onNodeWithTag("search_bar").assertDoesNotExist()
         compose.onNodeWithTag("game_maze-ops").assertExists()
         compose.onNodeWithTag("section_favorites").performClick()
         compose.onNodeWithTag("game_maze-ops").assertDoesNotExist()
         compose.onNodeWithTag("section_library").performClick()
         compose.onNodeWithTag("game_maze-ops").assertExists()
-        compose.onNodeWithTag("view_mode").performClick()
-        compose.onNodeWithTag("immersive_play").assertIsDisplayed()
-        compose.onNodeWithTag("view_mode").performClick()
+        compose.onNodeWithTag("view_mode").assertDoesNotExist()
         compose.onNodeWithTag("game_grid").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
         compose.onNodeWithTag("menu_button").performClick()
@@ -89,18 +106,17 @@ class LibraryUiTest {
         compose.onNodeWithTag("info_action").performClick()
         compose.onNodeWithText("An in-progress maze ops build. Early look at the game — playable in the browser while it is still in development.").assertExists()
         controllerButton(KeyEvent.KEYCODE_BUTTON_B)
-        compose.onNodeWithTag("play_action").assertExists()
-        controllerButton(KeyEvent.KEYCODE_BUTTON_B)
-        compose.onNodeWithTag("game_maze-ops").assertIsFocused()
+        compose.onNodeWithTag("play_action").assertDoesNotExist()
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
     }
 
     @Test
     @Config(sdk = [35], qualifiers = "w850dp-h480dp-land-mdpi")
     fun handheldHeaderDoesNotSqueezeSearchOut() {
         compose.onNodeWithTag("search_button").assertIsDisplayed().assertWidthIsAtLeast(40.dp)
-        compose.onNodeWithTag("view_mode").assertIsDisplayed()
+        compose.onNodeWithTag("view_mode").assertDoesNotExist()
         compose.onNodeWithContentDescription("Profile: Kidxpr").assertIsDisplayed()
-        compose.onNodeWithTag("game_maze-ops").assertIsFocused()
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
     }
 
     @Test
@@ -120,8 +136,39 @@ class LibraryUiTest {
         compose.onNodeWithTag("add_game").assertIsDisplayed()
         compose.onNodeWithTag("network_status").assertDoesNotExist()
         compose.onNodeWithTag("add_game").performClick()
-        compose.onNodeWithTag("add_game_action").assertIsDisplayed()
-        compose.onNodeWithText("Add a game").assertIsDisplayed()
+        compose.onNodeWithTag("add_game_action").assertIsDisplayed().assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithText("File app").assertIsDisplayed()
+    }
+
+    @Test fun profileMenuAndSettingsFollowTheCursor() {
+        compose.onNodeWithContentDescription("Profile: Kidxpr").performClick()
+        compose.onNodeWithContentDescription("View profile").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithContentDescription("Settings").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithTag("aspect_16_9").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.onNodeWithTag("aspect_4_3").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithContentDescription("Close settings").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_B)
+        compose.onNodeWithTag("app_details").assertDoesNotExist()
+    }
+
+    @Test fun gameInfoMovesBetweenPlayFavoriteAndBack() {
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithTag("info_play").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.onNodeWithTag("info_favorite").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        controllerButton(KeyEvent.KEYCODE_DPAD_UP)
+        compose.onNodeWithTag("info_back").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_UP)
+        compose.onNodeWithTag("game_maze-ops").assertIsSelected()
+        compose.onNodeWithTag("info_play").assertDoesNotExist()
     }
 
     @Test fun settingsShowsThisBuildVersion() {
@@ -129,7 +176,7 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithTag("app_details").assertIsDisplayed()
         compose.onNodeWithText("APP DETAILS").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.3 (fixed)").assertIsDisplayed()
+        compose.onNodeWithContentDescription("App version 0.0.4").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
         compose.onNodeWithTag("app_details").assertDoesNotExist()
     }

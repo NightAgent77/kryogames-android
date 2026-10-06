@@ -76,12 +76,14 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -117,6 +119,13 @@ private fun <T> motionIn() = tween<T>(MotionIn, easing = MotionEase)
 private fun <T> motionOut() = tween<T>(MotionOut, easing = MotionEase)
 
 private enum class SearchPhase { Closed, Highlighted, Editing }
+
+private enum class ShellSlot { MENU, DISCOVER, LIBRARY, FAVORITES, SEARCH, BELL, PROFILE, GRID, RAIL }
+
+private val HeaderSlots = listOf(
+    ShellSlot.MENU, ShellSlot.DISCOVER, ShellSlot.LIBRARY, ShellSlot.FAVORITES,
+    ShellSlot.SEARCH, ShellSlot.BELL, ShellSlot.PROFILE,
+)
 
 private val HeaderSections = listOf("Discover", "Library", "Favorites")
 
@@ -195,8 +204,6 @@ fun LibraryScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var filterName by rememberSaveable { mutableStateOf(LibraryFilter.ALL.name) }
     var section by rememberSaveable { mutableStateOf("Library") }
-    var immersive by rememberSaveable { mutableStateOf(false) }
-    var immersiveIndex by rememberSaveable { mutableIntStateOf(0) }
     var lastFocusedGameId by rememberSaveable { mutableStateOf(games.firstOrNull()?.id) }
     var focusOnAdd by rememberSaveable { mutableStateOf(false) }
     var actionGameId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -207,12 +214,18 @@ fun LibraryScreen(
     var searchPhaseName by rememberSaveable { mutableStateOf(SearchPhase.Closed.name) }
     var railFocusNonce by remember { mutableIntStateOf(0) }
     var rootHasFocus by remember { mutableStateOf(false) }
+    var slotName by rememberSaveable { mutableStateOf(ShellSlot.GRID.name) }
+    var gridIndex by rememberSaveable { mutableIntStateOf(0) }
+    var railIndex by rememberSaveable { mutableIntStateOf(0) }
+    var choiceRow by rememberSaveable { mutableIntStateOf(0) }
+    var menuIndex by rememberSaveable { mutableIntStateOf(0) }
+    val slot = runCatching { ShellSlot.valueOf(slotName) }.getOrDefault(ShellSlot.GRID)
+    val layoutColumns = remember { intArrayOf(4) }
+    val resolvedAspect = remember { mutableStateOf(DisplayAspect.WIDESCREEN) }
     val railFocus = remember { List(4) { FocusRequester() } }
     val sectionFocus = remember { List(HeaderSections.size) { FocusRequester() } }
     val addFocus = remember { FocusRequester() }
-    val viewFocus = remember { FocusRequester() }
     val searchButtonFocus = remember { FocusRequester() }
-    val searchHighlightFocus = remember { FocusRequester() }
     var firstFocusPlaced by remember { mutableStateOf(false) }
     val searchPhase = SearchPhase.valueOf(searchPhaseName)
     val filter = LibraryFilter.valueOf(filterName)
@@ -224,7 +237,6 @@ fun LibraryScreen(
     val cardFocus = remember(ids) { ids.associateWith { FocusRequester() } }
     val menuFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
-    val immersiveFocus = remember { FocusRequester() }
     val gridState = rememberLazyGridState()
     val keyboard = LocalSoftwareKeyboardController.current
     val selectedGame = games.firstOrNull { it.id == lastFocusedGameId } ?: visible.firstOrNull()
@@ -233,6 +245,16 @@ fun LibraryScreen(
     var frameCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var menuSize by remember { mutableStateOf(IntSize(0, 0)) }
     val shellBlocked = settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || showingInfo || modalOpen
+    val controllerHost = LocalContext.current.findControllerActivity()
+    SideEffect {
+        if (gridIndex > visible.size) gridIndex = visible.size
+        if (slot == ShellSlot.GRID) {
+            visible.getOrNull(gridIndex)?.let { if (lastFocusedGameId != it.id) lastFocusedGameId = it.id }
+            val onAdd = gridIndex >= visible.size
+            if (focusOnAdd != onAdd) focusOnAdd = onAdd
+        }
+        controllerHost?.libraryOwnsDirections = !modalOpen
+    }
 
     fun frameRect(coords: LayoutCoordinates): Rect? {
         val frame = frameCoordinates ?: return null
@@ -251,21 +273,38 @@ fun LibraryScreen(
         actionGameId = game.id
         showingInfo = false
         lastFocusedGameId = game.id
+        choiceRow = 0
+        menuIndex = 0
     }
+    fun openInfo(game: Game) {
+        lastFocusedGameId = game.id
+        actionGameId = game.id
+        showingInfo = true
+        menuIndex = 1
+    }
+    fun settingsStartIndex() = if (resolvedAspect.value == DisplayAspect.CLASSIC) 1 else 0
     fun closeChoices() {
         actionGameId = null
         showingInfo = false
     }
     fun toggleSidebar() {
         sidebarOpen = !sidebarOpen
-        if (sidebarOpen) railFocusNonce++
+        if (sidebarOpen) {
+            railFocusNonce++
+            railIndex = if (section == "Friends") 1 else 0
+            slotName = ShellSlot.RAIL.name
+        } else if (slotName == ShellSlot.RAIL.name) {
+            slotName = ShellSlot.MENU.name
+        }
     }
     fun applySection(next: String) {
         section = next
         profileMenuOpen = false
         closeChoices()
+        gridIndex = 0
         if (next == "Favorites") filterName = LibraryFilter.FAVORITES.name
         else if (next == "Library" || next == "Discover") filterName = LibraryFilter.ALL.name
+        if (next == "Friends" && slotName == ShellSlot.GRID.name) slotName = ShellSlot.LIBRARY.name
     }
     fun closeSearch() {
         searchPhaseName = SearchPhase.Closed.name
@@ -279,12 +318,15 @@ fun LibraryScreen(
     fun activateSearch() {
         if (searchPhase == SearchPhase.Highlighted) searchPhaseName = SearchPhase.Editing.name
     }
+    fun sectionSlot(): ShellSlot = when (section) {
+        "Discover" -> ShellSlot.DISCOVER
+        "Favorites" -> ShellSlot.FAVORITES
+        else -> ShellSlot.LIBRARY
+    }
     val restoreFocus = rememberUpdatedState {
         when {
             section == "Friends" -> menuFocus.requestSafe()
-            searchPhase == SearchPhase.Editing -> searchFocus.requestSafe()
-            searchPhase == SearchPhase.Highlighted -> searchHighlightFocus.requestSafe()
-            immersive && visible.isNotEmpty() -> immersiveFocus.requestSafe()
+            searchPhase != SearchPhase.Closed -> searchFocus.requestSafe()
             focusOnAdd || ids.isEmpty() -> addFocus.requestSafe() || menuFocus.requestSafe()
             else -> {
                 val target = cardFocus[lastFocusedGameId] ?: ids.firstOrNull()?.let { cardFocus[it] }
@@ -296,18 +338,190 @@ fun LibraryScreen(
     val rootFocusedNow by rememberUpdatedState(rootHasFocus)
     val blockedNow by rememberUpdatedState(shellBlocked)
 
+    fun moveCursor(dx: Int, dy: Int) {
+        if (modalOpen || searchPhase != SearchPhase.Closed) return
+        if (showingInfo) {
+            when {
+                dy > 0 && menuIndex == 0 -> menuIndex = 1
+                dy < 0 && menuIndex == 0 -> closeChoices()
+                dy < 0 && menuIndex > 0 -> menuIndex = 0
+                dx > 0 && menuIndex == 1 -> menuIndex = 2
+                dx < 0 && menuIndex == 2 -> menuIndex = 1
+            }
+            return
+        }
+        if (settingsOpen) {
+            when {
+                dx < 0 && menuIndex == 1 -> menuIndex = 0
+                dx > 0 && menuIndex == 0 -> menuIndex = 1
+                dy > 0 && menuIndex < 2 -> menuIndex = 2
+                dy < 0 && menuIndex == 2 -> menuIndex = 0
+            }
+            return
+        }
+        if (profileMenuOpen) {
+            if (dy < 0 && menuIndex > 0) menuIndex--
+            else if (dy > 0 && menuIndex < 2) menuIndex++
+            return
+        }
+        if (addMenuOpen) return
+        if (actionGameId != null) {
+            if (dy != 0) choiceRow = (choiceRow + dy).coerceIn(0, 1)
+            return
+        }
+        when (slot) {
+            ShellSlot.GRID -> {
+                val count = visible.size + 1
+                val current = gridIndex.coerceIn(0, (count - 1).coerceAtLeast(0))
+                val next = gridNeighbor(current, count, layoutColumns[0].coerceAtLeast(1), dx, dy)
+                when {
+                    next != null -> gridIndex = next
+                    dy < 0 -> slotName = sectionSlot().name
+                    dx < 0 && sidebarOpen -> slotName = ShellSlot.RAIL.name
+                    dx < 0 -> slotName = ShellSlot.MENU.name
+                }
+            }
+            ShellSlot.RAIL -> when {
+                dy < 0 && railIndex > 0 -> railIndex--
+                dy > 0 && railIndex < 3 -> railIndex++
+                dx > 0 -> slotName = ShellSlot.GRID.name
+            }
+            else -> {
+                val index = HeaderSlots.indexOf(slot)
+                if (dx != 0 && index >= 0) {
+                    val next = (index + dx).coerceIn(0, HeaderSlots.lastIndex)
+                    if (next != index) slotName = HeaderSlots[next].name
+                    else if (dx < 0 && sidebarOpen && slot == ShellSlot.MENU) slotName = ShellSlot.RAIL.name
+                } else if (dy > 0 && section != "Friends") slotName = ShellSlot.GRID.name
+            }
+        }
+    }
+    fun confirmCursor() {
+        if (modalOpen) return
+        if (searchPhase == SearchPhase.Highlighted) {
+            activateSearch()
+            return
+        }
+        if (searchPhase == SearchPhase.Editing) return
+        if (showingInfo) {
+            val game = actionGame ?: return
+            when (menuIndex) {
+                0 -> closeChoices()
+                1 -> {
+                    closeChoices()
+                    onPlay(game)
+                }
+                else -> onToggleFavorite(game)
+            }
+            return
+        }
+        if (settingsOpen) {
+            when (menuIndex) {
+                0 -> onAspect(DisplayAspect.WIDESCREEN)
+                1 -> onAspect(DisplayAspect.CLASSIC)
+                else -> settingsOpen = false
+            }
+            return
+        }
+        if (profileMenuOpen) {
+            when (menuIndex) {
+                0 -> {
+                    profileMenuOpen = false
+                    onProfile()
+                }
+                1 -> {
+                    profileMenuOpen = false
+                    settingsOpen = true
+                    menuIndex = settingsStartIndex()
+                }
+                else -> {
+                    profileMenuOpen = false
+                    onSidebarAction("Log out")
+                }
+            }
+            return
+        }
+        if (addMenuOpen) {
+            addMenuOpen = false
+            onAddGame()
+            return
+        }
+        if (actionGameId != null) {
+            val game = actionGame ?: return
+            if (choiceRow == 0) {
+                closeChoices()
+                onPlay(game)
+            } else openInfo(game)
+            return
+        }
+        when (slot) {
+            ShellSlot.MENU -> toggleSidebar()
+            ShellSlot.DISCOVER -> applySection("Discover")
+            ShellSlot.LIBRARY -> applySection("Library")
+            ShellSlot.FAVORITES -> applySection("Favorites")
+            ShellSlot.SEARCH -> if (searchPhase == SearchPhase.Closed) toggleSearch()
+            ShellSlot.BELL -> onNotifications()
+            ShellSlot.PROFILE -> {
+                profileMenuOpen = !profileMenuOpen
+                if (profileMenuOpen) menuIndex = 0
+            }
+            ShellSlot.GRID -> {
+                if (gridIndex >= visible.size) {
+                    profileMenuOpen = false
+                    settingsOpen = false
+                    closeChoices()
+                    addMenuOpen = true
+                    menuIndex = 0
+                } else visible.getOrNull(gridIndex)?.let(::openGameChoices)
+            }
+            ShellSlot.RAIL -> when (railIndex) {
+                0 -> {
+                    applySection("Library")
+                    sidebarOpen = false
+                    slotName = ShellSlot.GRID.name
+                }
+                1 -> {
+                    section = "Friends"
+                    profileMenuOpen = false
+                    closeChoices()
+                    sidebarOpen = false
+                    slotName = ShellSlot.LIBRARY.name
+                }
+                2 -> {
+                    sidebarOpen = false
+                    slotName = ShellSlot.MENU.name
+                    onSidebarAction("Downloads")
+                }
+                else -> {
+                    profileMenuOpen = false
+                    settingsOpen = true
+                    sidebarOpen = false
+                    slotName = ShellSlot.MENU.name
+                    menuIndex = settingsStartIndex()
+                }
+            }
+        }
+    }
     val handleAction by rememberUpdatedState<(ControllerAction) -> Unit> { action ->
-        if (!modalOpen && actionGameId == null && !settingsOpen && !profileMenuOpen && !addMenuOpen) when (action) {
+        when (action) {
+            ControllerAction.LEFT -> moveCursor(-1, 0)
+            ControllerAction.RIGHT -> moveCursor(1, 0)
+            ControllerAction.UP -> moveCursor(0, -1)
+            ControllerAction.DOWN -> moveCursor(0, 1)
+            ControllerAction.CONFIRM -> confirmCursor()
+            else -> Unit
+        }
+        if (showingInfo && action != ControllerAction.LEFT && action != ControllerAction.RIGHT &&
+            action != ControllerAction.UP && action != ControllerAction.DOWN && action != ControllerAction.CONFIRM
+        ) closeChoices()
+        if (!modalOpen && action == ControllerAction.SEARCH) {
+            toggleSearch()
+        } else if (!modalOpen && actionGameId == null && !settingsOpen && !profileMenuOpen && !addMenuOpen && searchPhase == SearchPhase.Closed) when (action) {
             ControllerAction.MENU -> toggleSidebar()
-            ControllerAction.SEARCH -> toggleSearch()
             ControllerAction.OPTIONS -> {
-                val game = if (immersive && section != "Friends") visible.getOrNull(immersiveIndex.coerceIn(0, visible.lastIndex.coerceAtLeast(0))) else selectedGame
+                val game = selectedGame
                 if (game == null) return@rememberUpdatedState
-                if (immersive && section != "Friends") {
-                    lastFocusedGameId = game.id
-                    actionGameId = game.id
-                    showingInfo = true
-                } else openGameChoices(game)
+                openGameChoices(game)
             }
             ControllerAction.PREVIOUS_TAB -> {
                 val index = HeaderSections.indexOf(section)
@@ -317,15 +531,13 @@ fun LibraryScreen(
                 val index = HeaderSections.indexOf(section)
                 if (index in 0 until HeaderSections.lastIndex) applySection(HeaderSections[index + 1])
             }
+            else -> Unit
         }
     }
     LaunchedEffect(controllerActions) { controllerActions.collect { handleAction(it) } }
     LaunchedEffect(searchPhase) {
         when (searchPhase) {
-            SearchPhase.Highlighted -> {
-                keyboard?.hide()
-                searchHighlightFocus.bringIntoFocus()
-            }
+            SearchPhase.Highlighted -> keyboard?.hide()
             SearchPhase.Editing -> {
                 searchFocus.bringIntoFocus()
                 keyboard?.show()
@@ -333,27 +545,12 @@ fun LibraryScreen(
             SearchPhase.Closed -> keyboard?.hide()
         }
     }
-    LaunchedEffect(ids, immersive) {
+    LaunchedEffect(ids) {
         if (!modalOpen && !shellBlocked && !firstFocusPlaced && section != "Friends") {
-            if (!immersive && ids.isNotEmpty()) gridState.scrollToItem(0)
-            if (immersive && ids.isNotEmpty()) immersiveFocus.bringIntoFocus()
-            else if (ids.isNotEmpty()) cardFocus[ids.first()]?.bringIntoFocus()
+            if (ids.isNotEmpty()) gridState.scrollToItem(0)
+            if (ids.isNotEmpty()) cardFocus[ids.first()]?.bringIntoFocus()
             else addFocus.bringIntoFocus()
             firstFocusPlaced = true
-        }
-    }
-    LaunchedEffect(immersive) {
-        if (!firstFocusPlaced || shellBlocked || section == "Friends") return@LaunchedEffect
-        if (immersive && ids.isNotEmpty()) {
-            val selected = ids.indexOf(lastFocusedGameId)
-            if (selected >= 0) immersiveIndex = selected
-            immersiveFocus.bringIntoFocus()
-        } else if (!immersive) {
-            val index = ids.indexOf(lastFocusedGameId).takeIf { it >= 0 } ?: 0
-            if (ids.isNotEmpty()) {
-                gridState.scrollToItem(index)
-                cardFocus[ids[index]]?.bringIntoFocus()
-            } else addFocus.bringIntoFocus()
         }
     }
     var railWasOpen by remember { mutableStateOf(sidebarOpen) }
@@ -383,11 +580,14 @@ fun LibraryScreen(
             addMenuOpen -> addMenuOpen = false
             settingsOpen -> settingsOpen = false
             profileMenuOpen -> profileMenuOpen = false
-            actionGameId != null && showingInfo -> showingInfo = false
+            actionGameId != null && showingInfo -> closeChoices()
             actionGameId != null -> closeChoices()
             searchPhase != SearchPhase.Closed -> closeSearch()
             section == "Friends" -> applySection("Library")
-            else -> sidebarOpen = false
+            else -> {
+                sidebarOpen = false
+                if (slotName == ShellSlot.RAIL.name) slotName = ShellSlot.MENU.name
+            }
         }
     }
 
@@ -410,9 +610,8 @@ fun LibraryScreen(
         }
         val animatedW by animateDpAsState(frameW, motionIn(), label = "frameWidth")
         val animatedH by animateDpAsState(frameH, motionIn(), label = "frameHeight")
-        val immersiveBackdrop = immersive && section != "Friends" && !showingInfo
         val frameColor by androidx.compose.animation.animateColorAsState(
-            if (immersiveBackdrop) Color(0xFF071426) else KryoColors.Background,
+            KryoColors.Background,
             tween(MotionIn, easing = MotionEase),
             label = "frameColor",
         )
@@ -462,9 +661,10 @@ fun LibraryScreen(
                             availableGridWidth >= 420.dp -> 3
                             else -> 2
                         }
+                        layoutColumns[0] = columns
+                        resolvedAspect.value = resolved
                         val libraryDown = when {
                             section == "Friends" -> menuFocus
-                            immersive && visible.isNotEmpty() -> immersiveFocus
                             visible.isNotEmpty() -> cardFocus.getValue(visible.first().id)
                             else -> addFocus
                         }
@@ -478,7 +678,7 @@ fun LibraryScreen(
                             val next = gridNeighbor(index, slotCount, columns, dx, dy)
                             slotTarget(next ?: -1)?.let { return it }
                             return when {
-                                dy < 0 -> viewFocus
+                                dy < 0 -> sectionFocus[HeaderSections.indexOf(section).coerceAtLeast(0)]
                                 dx < 0 && sidebarOpen -> railFocus[0]
                                 dx < 0 -> menuFocus
                                 else -> FocusRequester.Default
@@ -493,25 +693,25 @@ fun LibraryScreen(
                                 query = query,
                                 username = username,
                                 searchPhase = searchPhase,
-                                immersive = immersive,
                                 searchFocus = searchFocus,
-                                searchHighlightFocus = searchHighlightFocus,
                                 searchButtonFocus = searchButtonFocus,
                                 menuFocus = menuFocus,
                                 sectionFocus = sectionFocus,
-                                viewFocus = viewFocus,
                                 downTarget = libraryDown,
+                                cursor = slot,
+                                searchArmed = searchPhase != SearchPhase.Closed,
                                 onSection = ::applySection,
                                 onQuery = { query = it },
                                 onToggleMenu = { toggleSidebar() },
                                 onNotifications = onNotifications,
-                                onProfile = { profileMenuOpen = !profileMenuOpen },
+                                onProfile = {
+                                    profileMenuOpen = !profileMenuOpen
+                                    if (profileMenuOpen) menuIndex = 0
+                                },
                                 onProfilePlaced = { rememberAnchor("profile", it) },
                                 onToggleSearch = { toggleSearch() },
-                                onActivateSearch = { activateSearch() },
-                                onToggleView = { immersive = !immersive },
                             )
-                            if (section != "Friends" && !immersive && !showingInfo) {
+                            if (section != "Friends" && !showingInfo) {
                                 Spacer(Modifier.height(m.d(16)))
                                 Box(Modifier.padding(start = m.d(8))) {
                                     Crossfade(section, animationSpec = tween(MotionIn, easing = MotionEase), label = "title") { Title(it, m) }
@@ -522,7 +722,7 @@ fun LibraryScreen(
                             }
                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                 OverlayVisibility(
-                                    visible = section != "Friends" && !showingInfo && !immersive,
+                                    visible = section != "Friends" && !showingInfo,
                                     modifier = Modifier.fillMaxSize(),
                                     enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { -it / 16 },
                                     exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { -it / 16 },
@@ -558,6 +758,7 @@ fun LibraryScreen(
                                                             down = slotLink(index, 0, 1)
                                                         },
                                                     pinned = game.id == actionGameId,
+                                                    highlighted = slot == ShellSlot.GRID && actionGameId == null && index == gridIndex,
                                                     onFocused = {
                                                         lastFocusedGameId = game.id
                                                         focusOnAdd = false
@@ -579,58 +780,19 @@ fun LibraryScreen(
                                                             down = slotLink(index, 0, 1)
                                                         }
                                                         .testTag("add_game"),
+                                                    highlighted = slot == ShellSlot.GRID && actionGameId == null && index == gridIndex,
                                                     onFocused = { focusOnAdd = true },
                                                     onClick = {
                                                         profileMenuOpen = false
                                                         settingsOpen = false
                                                         closeChoices()
                                                         addMenuOpen = !addMenuOpen
+                                                        if (addMenuOpen) menuIndex = 0
                                                     },
                                                 )
                                             }
                                         }
                                     }
-                                }
-                                OverlayVisibility(
-                                    visible = section != "Friends" && !showingInfo && immersive,
-                                    modifier = Modifier.fillMaxSize(),
-                                    enter = fadeIn(motionIn()),
-                                    exit = fadeOut(motionOut()),
-                                ) {
-                                    val safeIndex = if (visible.isEmpty()) 0 else immersiveIndex.coerceIn(0, visible.lastIndex)
-                                    ImmersiveLibrary(
-                                        games = visible,
-                                        index = safeIndex,
-                                        filterLabel = if (section == "Favorites") "Favorites" else if (filter == LibraryFilter.ALL) "All games" else filter.label,
-                                        m = m,
-                                        carouselFocus = immersiveFocus,
-                                        upFocus = viewFocus,
-                                        onIndex = { next ->
-                                            immersiveIndex = next
-                                            visible.getOrNull(next)?.let {
-                                                lastFocusedGameId = it.id
-                                                focusOnAdd = false
-                                            }
-                                        },
-                                        onCycleFilter = {
-                                            if (section == "Favorites") return@ImmersiveLibrary
-                                            val order = listOf(LibraryFilter.ALL, LibraryFilter.WEB, LibraryFilter.ANDROID, LibraryFilter.INSTALLED)
-                                            val current = order.indexOf(filter).let { if (it < 0) 0 else it }
-                                            filterName = order[(current + 1) % order.size].name
-                                        },
-                                        onPlay = { game ->
-                                            lastFocusedGameId = game.id
-                                            onPlay(game)
-                                        },
-                                        onDetails = { game ->
-                                            lastFocusedGameId = game.id
-                                            profileMenuOpen = false
-                                            addMenuOpen = false
-                                            settingsOpen = false
-                                            actionGameId = game.id
-                                            showingInfo = true
-                                        },
-                                    )
                                 }
                                 OverlayVisibility(
                                     visible = section == "Friends",
@@ -652,11 +814,12 @@ fun LibraryScreen(
                                                 game = game,
                                                 m = m,
                                                 classic = resolved == DisplayAspect.CLASSIC,
+                                                selection = menuIndex,
                                                 onPlay = {
                                                     closeChoices()
                                                     onPlay(game)
                                                 },
-                                                onBack = { showingInfo = false },
+                                                onBack = { closeChoices() },
                                                 onToggleFavorite = { onToggleFavorite(game) },
                                             )
                                         }
@@ -674,7 +837,12 @@ fun LibraryScreen(
                 ) {
                     Box(
                         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f))
-                            .pointerInput(Unit) { detectTapGestures { sidebarOpen = false } },
+                            .pointerInput(Unit) {
+                                detectTapGestures {
+                                    sidebarOpen = false
+                                    if (slotName == ShellSlot.RAIL.name) slotName = ShellSlot.MENU.name
+                                }
+                            },
                     )
                 }
                 Sidebar(
@@ -685,6 +853,7 @@ fun LibraryScreen(
                     settingsOpen = settingsOpen,
                     focus = railFocus,
                     focusRequest = railFocusNonce,
+                    railCursor = if (slot == ShellSlot.RAIL) railIndex else -1,
                     onLibrary = {
                         applySection("Library")
                         sidebarOpen = false
@@ -703,6 +872,7 @@ fun LibraryScreen(
                         profileMenuOpen = false
                         settingsOpen = true
                         sidebarOpen = false
+                        menuIndex = settingsStartIndex()
                     },
                 )
             }
@@ -715,16 +885,18 @@ fun LibraryScreen(
                 anchor = choiceAnchor,
                 menuSize = menuSize,
                 onMenuSize = { menuSize = it },
+                selectedRow = choiceRow,
                 onPlay = { game ->
                     closeChoices()
                     onPlay(game)
                 },
-                onInfo = { showingInfo = true },
+                onInfo = { actionGame?.let(::openInfo) },
                 onDismiss = { closeChoices() },
             )
             AddGameMenu(
                 visible = addMenuOpen && section != "Friends",
                 anchor = anchors["add-game"],
+                highlighted = addMenuOpen,
                 onAdd = {
                     addMenuOpen = false
                     onAddGame()
@@ -734,6 +906,7 @@ fun LibraryScreen(
             ProfileMenuLayer(
                 visible = profileMenuOpen,
                 anchor = anchors["profile"],
+                selectedRow = menuIndex,
                 onViewProfile = {
                     profileMenuOpen = false
                     onProfile()
@@ -741,6 +914,7 @@ fun LibraryScreen(
                 onSettings = {
                     profileMenuOpen = false
                     settingsOpen = true
+                    menuIndex = settingsStartIndex()
                 },
                 onLogOut = {
                     profileMenuOpen = false
@@ -751,6 +925,7 @@ fun LibraryScreen(
             SettingsLayer(
                 visible = settingsOpen,
                 aspect = resolved,
+                selectedIndex = menuIndex,
                 onAspect = onAspect,
                 onDismiss = { settingsOpen = false },
             )
@@ -767,6 +942,7 @@ private fun Sidebar(
     settingsOpen: Boolean,
     focus: List<FocusRequester>,
     focusRequest: Int,
+    railCursor: Int,
     onLibrary: () -> Unit,
     onFriends: () -> Unit,
     onDownloads: () -> Unit,
@@ -812,6 +988,7 @@ private fun Sidebar(
                     description = item.label,
                     filled = item.active,
                     marked = item.active,
+                    highlighted = index == railCursor,
                     onClick = item.action,
                 ) {
                     Row(
@@ -837,14 +1014,13 @@ private fun Header(
     query: String,
     username: String,
     searchPhase: SearchPhase,
-    immersive: Boolean,
     searchFocus: FocusRequester,
-    searchHighlightFocus: FocusRequester,
     searchButtonFocus: FocusRequester,
     menuFocus: FocusRequester,
     sectionFocus: List<FocusRequester>,
-    viewFocus: FocusRequester,
     downTarget: FocusRequester,
+    cursor: ShellSlot,
+    searchArmed: Boolean,
     onSection: (String) -> Unit,
     onQuery: (String) -> Unit,
     onToggleMenu: () -> Unit,
@@ -852,12 +1028,10 @@ private fun Header(
     onProfile: () -> Unit,
     onProfilePlaced: (LayoutCoordinates) -> Unit,
     onToggleSearch: () -> Unit,
-    onActivateSearch: () -> Unit,
-    onToggleView: () -> Unit,
 ) {
     val widget = m.d(48).coerceAtLeast(44.dp)
     val searchOpen = searchPhase != SearchPhase.Closed
-    val barDown = if (searchPhase == SearchPhase.Highlighted) searchHighlightFocus else if (searchPhase == SearchPhase.Editing) searchFocus else downTarget
+    val barDown = if (searchOpen) searchFocus else downTarget
     val icons = listOf(
         Triple("Discover", Icons.Outlined.Explore, "section_discover"),
         Triple("Library", Icons.Outlined.VideoLibrary, "section_library"),
@@ -873,6 +1047,7 @@ private fun Header(
             }.testTag("menu_button"),
             description = "Menu",
             outlined = true,
+            highlighted = cursor == ShellSlot.MENU,
             onClick = onToggleMenu,
         ) {
             Icon(Icons.Outlined.Menu, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(22)))
@@ -887,35 +1062,21 @@ private fun Header(
                     label = label,
                     icon = icon,
                     active = section == label,
+                    highlighted = cursor == when (label) {
+                        "Discover" -> ShellSlot.DISCOVER
+                        "Library" -> ShellSlot.LIBRARY
+                        else -> ShellSlot.FAVORITES
+                    },
                     m = m,
                     modifier = Modifier.focusRequester(sectionFocus[index]).focusProperties {
                         left = if (index == 0) menuFocus else sectionFocus[index - 1]
-                        right = if (index == icons.lastIndex) viewFocus else sectionFocus[index + 1]
+                        right = if (index == icons.lastIndex) searchButtonFocus else sectionFocus[index + 1]
                         down = barDown
                     }.testTag(tag),
                     onClick = { onSection(label) },
                 )
             }
             KeyBadge("RB", m)
-        }
-    }
-    val viewButton: @Composable () -> Unit = {
-        FocusBox(
-            Modifier.size(widget).focusRequester(viewFocus).focusProperties {
-                left = sectionFocus.last()
-                right = searchButtonFocus
-                down = barDown
-            }.testTag("view_mode"),
-            description = if (immersive) "Switch to grid view" else "Switch to immersive view",
-            outlined = true,
-            onClick = onToggleView,
-        ) {
-            Icon(
-                if (immersive) Icons.Outlined.ViewCarousel else Icons.Outlined.GridView,
-                null,
-                tint = KryoColors.Text,
-                modifier = Modifier.size(m.d(22)),
-            )
         }
     }
     val bell: @Composable () -> Unit = {
@@ -927,6 +1088,7 @@ private fun Header(
             },
             "Notifications",
             outlined = true,
+            highlighted = cursor == ShellSlot.BELL,
             onClick = onNotifications,
         ) {
             Icon(Icons.Outlined.Notifications, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(22)))
@@ -940,6 +1102,7 @@ private fun Header(
             },
             "Profile: $username",
             outlined = true,
+            highlighted = cursor == ShellSlot.PROFILE,
             onClick = onProfile,
         ) {
             Row(
@@ -970,13 +1133,14 @@ private fun Header(
     val searchButton: @Composable () -> Unit = {
         FocusBox(
             Modifier.size(widget).focusRequester(searchButtonFocus).focusProperties {
-                left = viewFocus
+                left = sectionFocus.last()
                 right = bellFocus
                 down = barDown
             }.testTag("search_button"),
             "Search",
             outlined = searchPhase == SearchPhase.Closed,
             marked = searchPhase != SearchPhase.Closed,
+            highlighted = cursor == ShellSlot.SEARCH && searchPhase == SearchPhase.Closed,
             onClick = onToggleSearch,
         ) {
             Icon(Icons.Outlined.Search, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(22)))
@@ -988,7 +1152,6 @@ private fun Header(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(m.d(8)),
         ) {
-            viewButton()
             searchButton()
             bell()
         }
@@ -1013,16 +1176,17 @@ private fun Header(
                 profile = { profile(Modifier.fillMaxWidth()) },
             )
         }
-        if (searchPhase == SearchPhase.Highlighted) {
-            SearchHighlight(m, Modifier.fillMaxWidth().focusRequester(searchHighlightFocus).focusProperties {
-                up = searchButtonFocus
-                down = downTarget
-            }, onActivateSearch)
-        } else if (searchOpen) {
-            SearchField(query, onQuery, m, Modifier.fillMaxWidth().focusRequester(searchFocus).focusProperties {
-                up = searchButtonFocus
-                down = downTarget
-            })
+        if (searchOpen) {
+            SearchField(
+                query,
+                onQuery,
+                m,
+                Modifier.fillMaxWidth().focusRequester(searchFocus).focusProperties {
+                    up = searchButtonFocus
+                    down = downTarget
+                },
+                highlighted = searchArmed,
+            )
         }
     }
 }
@@ -1066,37 +1230,19 @@ private fun OpenRailHeader(
 }
 
 @Composable
-private fun SearchHighlight(m: Metrics, modifier: Modifier, onActivate: () -> Unit) {
-    FocusBox(
-        modifier.height(m.d(54).coerceAtLeast(44.dp)).testTag("search_bar"),
-        "Search games",
-        outlined = true,
-        marked = true,
-        onClick = onActivate,
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = m.d(12)),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(m.d(10)),
-        ) {
-            Icon(Icons.Outlined.Search, null, tint = KryoColors.Accent, modifier = Modifier.size(m.d(20)))
-            Text("Search games...", color = KryoColors.Muted, fontSize = m.t(14), maxLines = 1)
-        }
-    }
-}
-
-@Composable
 private fun SearchField(
     query: String,
     onQuery: (String) -> Unit,
     m: Metrics,
     modifier: Modifier,
+    highlighted: Boolean,
 ) {
     var focused by remember { mutableStateOf(false) }
     val frosted = LocalFrosted.current
     val editable = LocalUiEnabled.current
+    val ring = focused || highlighted
     val border by androidx.compose.animation.animateColorAsState(
-        if (focused) Color.White else if (frosted) Color.White.copy(alpha = 0.22f) else KryoColors.Border,
+        if (ring) KryoColors.Accent else if (frosted) Color.White.copy(alpha = 0.22f) else KryoColors.Border,
         tween(MotionIn, easing = MotionEase),
         label = "searchBorder",
     )
@@ -1109,7 +1255,8 @@ private fun SearchField(
         textStyle = TextStyle(color = KryoColors.Text, fontSize = m.t(14)),
         modifier = modifier.height(m.d(54).coerceAtLeast(44.dp)).onFocusChanged { focused = it.isFocused }
             .clip(RoundedCornerShape(m.d(7))).background(if (frosted) Color.White.copy(alpha = 0.16f) else KryoColors.Surface)
-            .border(if (focused) 2.dp else 1.dp, border, RoundedCornerShape(m.d(7)))
+            .border(if (ring) 2.dp else 1.dp, border, RoundedCornerShape(m.d(7)))
+            .semantics { if (highlighted) selected = true }
             .testTag("search_field"),
         decorationBox = { inner ->
             Row(
@@ -1137,6 +1284,7 @@ private fun HeaderIcon(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
+    highlighted: Boolean,
     m: Metrics,
     modifier: Modifier,
     onClick: () -> Unit,
@@ -1152,7 +1300,12 @@ private fun HeaderIcon(
         label = "headerLine",
     )
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FocusBox(Modifier.size(m.d(44).coerceAtLeast(40.dp)).then(modifier), label, onClick = onClick) {
+        FocusBox(
+            Modifier.size(m.d(44).coerceAtLeast(40.dp)).then(modifier),
+            label,
+            highlighted = highlighted,
+            onClick = onClick,
+        ) {
             Icon(icon, null, tint = tint, modifier = Modifier.size(m.d(22)))
         }
         Box(Modifier.width(m.d(22)).height(2.dp).background(underline))
@@ -1160,7 +1313,7 @@ private fun HeaderIcon(
 }
 
 @Composable
-private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean, onFocused: () -> Unit, onSelect: () -> Unit) {
+private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean, highlighted: Boolean, onFocused: () -> Unit, onSelect: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -1170,7 +1323,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
     val enabled = LocalUiEnabled.current
     val scale by animateFloatAsState(
         when {
-            focused -> 1.035f
+            focused || highlighted -> 1.035f
             hovered -> 1.02f
             pinned -> 1.02f
             else -> 1f
@@ -1180,7 +1333,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
     )
     val borderColor by androidx.compose.animation.animateColorAsState(
         when {
-            focused || pinned -> Color.White
+            focused || pinned || highlighted -> KryoColors.Accent
             hovered -> Color(0xFF8FA0B3)
             else -> Color(0xFF1F272D)
         },
@@ -1213,13 +1366,14 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
             }
             .clip(shape)
             .background(Brush.verticalGradient(listOf(Color(0xFF1B2025), Color(0xFF14191D))))
-            .border(if (focused || pinned) 3.dp else 1.dp, borderColor, shape)
+            .border(if (focused || pinned || highlighted) 3.dp else 1.dp, borderColor, shape)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = { if (enabled) onSelect() })
             .semantics {
                 contentDescription = "${game.title}, ${if (game.installed) "Installed" else if (game.platform == GamePlatform.WEB) "Web game" else "Android game"}${if (game.favorite) ", Favorite" else ""}"
+                if (highlighted) selected = true
             }
             .testTag("game_${game.id}")
-            .padding(if (focused || pinned) 3.dp else 1.dp),
+            .padding(if (focused || pinned || highlighted) 3.dp else 1.dp),
     ) {
         GameArtwork(game, Modifier.fillMaxWidth().weight(1f))
         Column(Modifier.fillMaxWidth().height(m.d(50)).padding(horizontal = m.d(11), vertical = m.d(6)), verticalArrangement = Arrangement.SpaceBetween) {
@@ -1268,6 +1422,7 @@ internal fun FocusBox(
     outlined: Boolean = false,
     filled: Boolean = false,
     marked: Boolean = false,
+    highlighted: Boolean = false,
     onClick: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -1275,10 +1430,11 @@ internal fun FocusBox(
     val shape = RoundedCornerShape(7.dp)
     val enabled = LocalUiEnabled.current
     val frosted = LocalFrosted.current
-    val showFill = filled || outlined || focused || marked
+    val ring = focused || highlighted
+    val showFill = filled || outlined || ring || marked
     val border by androidx.compose.animation.animateColorAsState(
         when {
-            focused -> Color.White
+            ring -> KryoColors.Accent
             marked -> KryoColors.Accent
             frosted && showFill -> Color.White.copy(alpha = 0.22f)
             outlined -> KryoColors.Border
@@ -1307,9 +1463,12 @@ internal fun FocusBox(
             } else true
         }.onFocusChanged { focused = it.isFocused }.clip(shape)
             .background(fill)
-            .border(if (focused || marked) 2.dp else 1.dp, border, shape)
+            .border(if (ring || marked) 2.dp else 1.dp, border, shape)
             .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
-            .semantics { contentDescription = description },
+            .semantics {
+                contentDescription = description
+                if (highlighted) selected = true
+            },
         contentAlignment = Alignment.Center,
         content = content,
     )
@@ -1333,6 +1492,7 @@ private fun GameChoiceLayer(
     anchor: Rect?,
     menuSize: IntSize,
     onMenuSize: (IntSize) -> Unit,
+    selectedRow: Int,
     onPlay: (Game) -> Unit,
     onInfo: () -> Unit,
     onDismiss: () -> Unit,
@@ -1394,6 +1554,7 @@ private fun GameChoiceLayer(
                     }.testTag("play_action"),
                     "Play",
                     outlined = true,
+                    highlighted = selectedRow == 0,
                     onClick = { onPlay(shownGame) },
                 ) {
                     Text("Play", color = KryoColors.Text, fontSize = 13.sp)
@@ -1408,6 +1569,7 @@ private fun GameChoiceLayer(
                     }.testTag("info_action"),
                     "Info",
                     outlined = true,
+                    highlighted = selectedRow == 1,
                     onClick = onInfo,
                 ) {
                     Text("Info", color = KryoColors.Text, fontSize = 13.sp)
@@ -1422,18 +1584,16 @@ private fun GameInfoView(
     game: Game,
     m: Metrics,
     classic: Boolean,
+    selection: Int,
     onPlay: () -> Unit,
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
 ) {
     val playFocus = remember { FocusRequester() }
-    LaunchedEffect(game.id) {
-        playFocus.bringIntoFocus()
-    }
     val gap = if (classic) m.d(12) else m.d(20)
     Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) {
         Column(Modifier.fillMaxSize().padding(horizontal = m.d(8), vertical = m.d(6))) {
-            FocusBox(Modifier.size(m.d(40)), "Back", outlined = true, onClick = onBack) {
+            FocusBox(Modifier.size(m.d(40)).testTag("info_back"), "Back", outlined = true, highlighted = selection == 0, onClick = onBack) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(18)))
             }
             Spacer(Modifier.height(m.d(8)))
@@ -1454,7 +1614,7 @@ private fun GameInfoView(
                         ) {
                             GameInfoArt(game, Modifier.size(artW, artH))
                             Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.CenterStart) {
-                                GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                                GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
                             }
                         }
                     } else {
@@ -1467,7 +1627,7 @@ private fun GameInfoView(
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             GameInfoArt(game, Modifier.size(artW, artH))
-                            GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                            GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
                         }
                     }
                 } else {
@@ -1475,7 +1635,7 @@ private fun GameInfoView(
                     if (stack) {
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
                             GameInfoArt(game, Modifier.fillMaxWidth().weight(1f))
-                            GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                            GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
                         }
                     } else {
                         Row(
@@ -1488,7 +1648,7 @@ private fun GameInfoView(
                                 Modifier.fillMaxHeight().aspectRatio(735f / 575f, matchHeightConstraintsFirst = true),
                             )
                             Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
-                                GameInfoCopy(game, m, classic, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
+                                GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
                             }
                         }
                     }
@@ -1515,6 +1675,7 @@ private fun GameInfoCopy(
     game: Game,
     m: Metrics,
     classic: Boolean,
+    selection: Int,
     playFocus: FocusRequester,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -1570,18 +1731,23 @@ private fun GameInfoCopy(
                     .onFocusChanged { playFocused = it.isFocused }
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color.White)
-                    .border(if (playFocused) 2.dp else 0.dp, KryoColors.Accent, RoundedCornerShape(8.dp))
+                    .border(if (playFocused || selection == 1) 3.dp else 0.dp, KryoColors.Accent, RoundedCornerShape(8.dp))
                     .clickable(role = Role.Button, onClick = onPlay)
-                    .semantics { contentDescription = "Play ${game.title}" }
+                    .semantics {
+                        contentDescription = "Play ${game.title}"
+                        if (selection == 1) selected = true
+                    }
+                    .testTag("info_play")
                     .padding(horizontal = m.d(22)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text("Play", color = Color(0xFF12141A), fontSize = m.t(15), fontWeight = FontWeight.Bold)
             }
             FocusBox(
-                Modifier.size(m.d(44)),
+                Modifier.size(m.d(44)).testTag("info_favorite"),
                 if (game.favorite) "Remove from favorites" else "Add to favorites",
                 outlined = true,
+                highlighted = selection == 2,
                 onClick = onToggleFavorite,
             ) {
                 Icon(Icons.Outlined.Star, null, tint = if (game.favorite) Color(0xFFFF3B3B) else Color.White, modifier = Modifier.size(m.d(20)))
@@ -1623,6 +1789,7 @@ private fun GameArtwork(game: Game, modifier: Modifier) {
 private fun AddGameMenu(
     visible: Boolean,
     anchor: Rect?,
+    highlighted: Boolean,
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1656,6 +1823,7 @@ private fun AddGameMenu(
                 Modifier.fillMaxWidth().height(40.dp).focusRequester(action).testTag("add_game_action"),
                 "Add a game",
                 outlined = true,
+                highlighted = highlighted,
                 onClick = onAdd,
             ) {
                 Text("Add a game", color = KryoColors.Text, fontSize = 14.sp)
@@ -1668,6 +1836,7 @@ private fun AddGameMenu(
 private fun ProfileMenuLayer(
     visible: Boolean,
     anchor: Rect?,
+    selectedRow: Int,
     onViewProfile: () -> Unit,
     onSettings: () -> Unit,
     onLogOut: () -> Unit,
@@ -1707,7 +1876,7 @@ private fun ProfileMenuLayer(
                 RowItem("View profile", first, first, second, onViewProfile),
                 RowItem("Settings", second, first, third, onSettings),
                 RowItem("Log out", third, second, third, onLogOut),
-            ).forEach { item ->
+            ).forEachIndexed { index, item ->
                 FocusBox(
                     Modifier.fillMaxWidth().height(40.dp).focusRequester(item.focus).focusProperties {
                         up = item.up
@@ -1717,6 +1886,7 @@ private fun ProfileMenuLayer(
                     },
                     item.label,
                     outlined = true,
+                    highlighted = index == selectedRow,
                     onClick = item.action,
                 ) {
                     Text(item.label, color = if (item.label == "Log out") Color(0xFFF0A0A0) else KryoColors.Text, fontSize = 14.sp)
@@ -1727,7 +1897,7 @@ private fun ProfileMenuLayer(
 }
 
 @Composable
-private fun SettingsLayer(visible: Boolean, aspect: DisplayAspect, onAspect: (DisplayAspect) -> Unit, onDismiss: () -> Unit) {
+private fun SettingsLayer(visible: Boolean, aspect: DisplayAspect, selectedIndex: Int, onAspect: (DisplayAspect) -> Unit, onDismiss: () -> Unit) {
     AnimatedVisibility(visible = visible, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(160)), exit = fadeOut(tween(140))) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.46f)).pointerInput(Unit) { detectTapGestures { onDismiss() } })
     }
@@ -1761,11 +1931,11 @@ private fun SettingsLayer(visible: Boolean, aspect: DisplayAspect, onAspect: (Di
                 Text("ASPECT RATIO", color = KryoColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AspectChoice("16:9", aspect == DisplayAspect.WIDESCREEN, Modifier.weight(1f).focusRequester(wide).focusProperties {
+                    AspectChoice("16:9", aspect == DisplayAspect.WIDESCREEN, selectedIndex == 0, Modifier.weight(1f).focusRequester(wide).focusProperties {
                         right = classic
                         down = close
                     }.testTag("aspect_16_9")) { onAspect(DisplayAspect.WIDESCREEN) }
-                    AspectChoice("4:3", aspect == DisplayAspect.CLASSIC, Modifier.weight(1f).focusRequester(classic).focusProperties {
+                    AspectChoice("4:3", aspect == DisplayAspect.CLASSIC, selectedIndex == 1, Modifier.weight(1f).focusRequester(classic).focusProperties {
                         left = wide
                         down = close
                     }.testTag("aspect_4_3")) { onAspect(DisplayAspect.CLASSIC) }
@@ -1806,7 +1976,7 @@ private fun SettingsLayer(visible: Boolean, aspect: DisplayAspect, onAspect: (Di
                 Spacer(Modifier.height(18.dp))
                 FocusBox(Modifier.fillMaxWidth().height(44.dp).focusRequester(close).focusProperties {
                     up = if (aspect == DisplayAspect.CLASSIC) classic else wide
-                }, "Close settings", outlined = true, onClick = onDismiss) {
+                }, "Close settings", outlined = true, highlighted = selectedIndex == 2, onClick = onDismiss) {
                     Text("Close", color = KryoColors.Text, fontSize = 15.sp)
                 }
             }
@@ -1815,7 +1985,7 @@ private fun SettingsLayer(visible: Boolean, aspect: DisplayAspect, onAspect: (Di
 }
 
 @Composable
-private fun AspectChoice(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun AspectChoice(label: String, selected: Boolean, highlighted: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val border by androidx.compose.animation.animateColorAsState(
         if (selected) KryoColors.Accent else KryoColors.Border,
         tween(MotionIn, easing = MotionEase),
@@ -1826,7 +1996,7 @@ private fun AspectChoice(label: String, selected: Boolean, modifier: Modifier, o
         tween(MotionIn, easing = MotionEase),
         label = "aspectFill",
     )
-    FocusBox(modifier.height(48.dp), label, onClick = onClick) {
+    FocusBox(modifier.height(48.dp), label, highlighted = highlighted, onClick = onClick) {
         Box(Modifier.fillMaxSize().background(fill).border(if (selected) 2.dp else 1.dp, border, RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
             Text(label, color = if (selected) KryoColors.Text else KryoColors.Muted, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         }
@@ -1834,8 +2004,9 @@ private fun AspectChoice(label: String, selected: Boolean, modifier: Modifier, o
 }
 
 @Composable
-private fun AddGameSlot(m: Metrics, modifier: Modifier, onFocused: () -> Unit, onClick: () -> Unit) {
+private fun AddGameSlot(m: Metrics, modifier: Modifier, highlighted: Boolean, onFocused: () -> Unit, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val ring = focused || highlighted
     val enabled = LocalUiEnabled.current
     val shape = RoundedCornerShape(m.d(7))
     Box(
@@ -1856,15 +2027,18 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, onFocused: () -> Unit, o
             .clip(shape)
             .background(Color(0xFF14191D))
             .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
-            .semantics { contentDescription = "Add a game" },
+            .semantics {
+                contentDescription = "Add a game"
+                if (highlighted) selected = true
+            },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.matchParentSize()) {
             val radius = m.d(7).toPx()
             drawRoundRect(
-                color = if (focused) Color.White else KryoColors.Border,
+                color = if (ring) KryoColors.Accent else KryoColors.Border,
                 style = Stroke(
-                    width = if (focused) 3.dp.toPx() else 1.5.dp.toPx(),
+                    width = if (ring) 3.dp.toPx() else 1.5.dp.toPx(),
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f),
                 ),
                 cornerRadius = CornerRadius(radius, radius),
@@ -1874,233 +2048,11 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, onFocused: () -> Unit, o
             Modifier.size(m.d(48).coerceAtLeast(42.dp))
                 .shadow(14.dp, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
                 .background(KryoColors.Surface, CircleShape)
-                .border(1.dp, if (focused) KryoColors.Accent else KryoColors.Border, CircleShape),
+                .border(1.dp, if (ring) KryoColors.Accent else KryoColors.Border, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Outlined.Add, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(26)))
         }
-    }
-}
-
-@Composable
-private fun ImmersiveLibrary(
-    games: List<Game>,
-    index: Int,
-    filterLabel: String,
-    m: Metrics,
-    carouselFocus: FocusRequester,
-    upFocus: FocusRequester,
-    onIndex: (Int) -> Unit,
-    onCycleFilter: () -> Unit,
-    onPlay: (Game) -> Unit,
-    onDetails: (Game) -> Unit,
-) {
-    val playFocus = remember { FocusRequester() }
-    val detailsFocus = remember { FocusRequester() }
-    val filterFocus = remember { FocusRequester() }
-    var carouselFocused by remember { mutableStateOf(false) }
-    val game = games.getOrNull(index)
-    Column(Modifier.fillMaxSize()) {
-        Box(
-            Modifier.weight(1f).fillMaxWidth().focusRequester(carouselFocus).onPreviewKeyEvent { event ->
-                if (games.isEmpty()) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionLeft -> {
-                        if (event.type == KeyEventType.KeyDown && index > 0) onIndex(index - 1)
-                        true
-                    }
-                    Key.DirectionRight -> {
-                        if (event.type == KeyEventType.KeyDown && index < games.lastIndex) onIndex(index + 1)
-                        true
-                    }
-                    Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                        if (event.type == KeyEventType.KeyUp) game?.let(onPlay)
-                        true
-                    }
-                    else -> false
-                }
-            }.onFocusChanged { carouselFocused = it.isFocused }.focusProperties {
-                up = upFocus
-                down = if (game == null) filterFocus else playFocus
-            }.border(if (carouselFocused) 3.dp else 0.dp, Color.White)
-                .clickable(role = Role.Button, onClick = { game?.let(onPlay) })
-                .semantics { contentDescription = game?.let { "Selected ${it.title}" } ?: "No games" },
-            contentAlignment = Alignment.Center,
-        ) {
-            if (games.isEmpty() || game == null) {
-                Text("No games match your search or filter.", color = KryoColors.Muted, fontSize = m.t(15))
-            } else {
-                val shift by animateFloatAsState(index.toFloat(), tween(280, easing = MotionEase), label = "carouselShift")
-                BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    val cardWidth = (maxWidth * 0.24f).coerceIn(m.d(128), m.d(240))
-                    val cardHeight = cardWidth / 0.68f
-                    Box(
-                        Modifier.width(cardWidth * 1.08f).height(cardHeight * 0.92f)
-                            .blur(26.dp)
-                            .background(KryoColors.Accent.copy(alpha = 0.45f), RoundedCornerShape(m.d(18))),
-                    )
-                    val ordered = games.indices.sortedByDescending { abs(it - shift) }
-                    ordered.forEach { position ->
-                        val delta = position - shift
-                        if (abs(delta) > 3.2f) return@forEach
-                        val depth = abs(delta).coerceAtMost(3f)
-                        val scale = 1f - depth * 0.13f
-                        val poster = games[position]
-                        val selected = abs(delta) < 0.45f
-                        Box(
-                            Modifier.width(cardWidth).height(cardHeight).graphicsLayer {
-                                translationX = delta * cardWidth.toPx() * 0.72f
-                                scaleX = scale
-                                scaleY = scale
-                                rotationY = (-delta * 20f).coerceIn(-46f, 46f)
-                                alpha = (1f - depth * 0.16f).coerceIn(0.4f, 1f)
-                                cameraDistance = 14f * density
-                            },
-                        ) {
-                            val shape = RoundedCornerShape(m.d(12))
-                            Box(
-                                Modifier.fillMaxSize()
-                                    .shadow(if (selected) 18.dp else 6.dp, shape)
-                                    .clip(shape)
-                                    .background(Color(0xFF101820))
-                                    .border(if (selected) 3.dp else 1.dp, if (selected) KryoColors.Accent else Color(0xFF243041), shape),
-                            ) {
-                                GameArtwork(poster, Modifier.fillMaxSize())
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (games.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().padding(bottom = m.d(10)),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                games.forEachIndexed { dot, _ ->
-                    val active = dot == index
-                    Box(
-                        Modifier.padding(horizontal = 3.dp)
-                            .size(if (active) 8.dp else 6.dp)
-                            .background(if (active) KryoColors.Accent else Color.White.copy(alpha = 0.35f), CircleShape),
-                    )
-                }
-            }
-            if (game != null) {
-                val platform = if (game.platform == GamePlatform.WEB) "Web" else "Android"
-                val status = if (game.installed) "Installed" else "Not installed"
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Row(
-                        Modifier.widthIn(max = 760.dp).fillMaxWidth(0.86f)
-                            .heightIn(min = m.d(78))
-                            .clip(RoundedCornerShape(m.d(28)))
-                            .background(Color(0xFF101820).copy(alpha = 0.92f))
-                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(m.d(28)))
-                            .padding(horizontal = m.d(18), vertical = m.d(12)),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(m.d(12)),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(game.title, color = KryoColors.Text, fontSize = m.t(22, 16), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("$platform · $status", color = KryoColors.Muted, fontSize = m.t(13), maxLines = 1)
-                        }
-                        ImmersiveAction(
-                            keyLabel = "A",
-                            label = "Play",
-                            filled = true,
-                            modifier = Modifier.focusRequester(playFocus).focusProperties {
-                                left = carouselFocus
-                                right = detailsFocus
-                                up = carouselFocus
-                                down = filterFocus
-                            }.testTag("immersive_play"),
-                            onClick = { onPlay(game) },
-                        )
-                        ImmersiveAction(
-                            keyLabel = "X",
-                            label = "Details",
-                            filled = false,
-                            modifier = Modifier.focusRequester(detailsFocus).focusProperties {
-                                left = playFocus
-                                right = filterFocus
-                                up = carouselFocus
-                                down = filterFocus
-                            }.testTag("immersive_details"),
-                            onClick = { onDetails(game) },
-                        )
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(m.d(12)))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            var filterFocused by remember { mutableStateOf(false) }
-            Row(
-                Modifier.focusRequester(filterFocus).onPreviewKeyEvent { event ->
-                    val activate = event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
-                    if (!activate) false
-                    else if (event.type == KeyEventType.KeyUp) {
-                        onCycleFilter()
-                        true
-                    } else true
-                }.onFocusChanged { filterFocused = it.isFocused }.focusProperties {
-                    up = if (game == null) carouselFocus else playFocus
-                    right = if (game == null) FocusRequester.Cancel else detailsFocus
-                }
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF121A24).copy(alpha = 0.92f))
-                    .border(if (filterFocused) 2.dp else 1.dp, if (filterFocused) Color.White else Color.White.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
-                    .clickable(role = Role.Button, onClick = onCycleFilter)
-                    .padding(horizontal = m.d(12), vertical = m.d(8))
-                    .testTag("library_filter"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(m.d(8)),
-            ) {
-                Icon(Icons.Outlined.FilterAlt, null, tint = KryoColors.Muted, modifier = Modifier.size(m.d(16)))
-                Text(filterLabel, color = KryoColors.Text, fontSize = m.t(13))
-                Icon(Icons.Outlined.KeyboardArrowDown, null, tint = KryoColors.Muted, modifier = Modifier.size(m.d(16)))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ImmersiveAction(
-    keyLabel: String,
-    label: String,
-    filled: Boolean,
-    modifier: Modifier,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(24.dp)
-    Row(
-        modifier.onPreviewKeyEvent { event ->
-            val activate = event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
-            if (!activate) false
-            else if (event.type == KeyEventType.KeyUp) {
-                onClick()
-                true
-            } else true
-        }.height(44.dp)
-            .onFocusChanged { focused = it.isFocused }
-            .clip(shape)
-            .background(if (filled) KryoColors.Accent else Color.White.copy(alpha = 0.08f))
-            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color.White.copy(alpha = if (filled) 0f else 0.2f), shape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = label }
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(
-            Modifier.size(22.dp).background(if (filled) Color(0xFF083044) else Color.White.copy(alpha = 0.12f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(keyLabel, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-        Text(label, color = if (filled) Color(0xFF062033) else KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
     }
 }
 
