@@ -69,6 +69,7 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
     val online = rememberDeviceOnline()
     var favoriteIds by rememberSaveable { mutableStateOf(listOf<String>()) }
     var aspectName by rememberSaveable { mutableStateOf(loadAspect(context)?.name) }
+    var appearanceName by rememberSaveable { mutableStateOf(loadAppearance(context).name) }
     var imported by remember { mutableStateOf(loadStoredImports(context)) }
     val games = remember(favoriteIds, imported) {
         (DemoGames.all + imported.map { it.asGame() }).map { it.copy(favorite = it.id in favoriteIds) }
@@ -165,6 +166,12 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             onAspect = { chosen ->
                 aspectName = chosen.name
                 saveAspect(context, chosen)
+            },
+            appearance = runCatching { KryoAppearance.valueOf(appearanceName) }.getOrDefault(KryoAppearance.DARK),
+            onAppearance = { chosen ->
+                appearanceName = chosen.name
+                KryoThemeState.appearance = chosen
+                saveAppearance(context, chosen)
             },
             onSidebarAction = { name ->
                 overlay = when (name) {
@@ -265,6 +272,7 @@ private tailrec fun Context.findActivity(): ComponentActivity? = when (this) {
 
 private const val SettingsPrefs = "kryo_settings"
 private const val AspectKey = "aspect"
+private const val AppearanceKey = "appearance"
 
 @Composable
 private fun rememberDeviceOnline(): Boolean {
@@ -307,6 +315,16 @@ internal fun loadAspect(context: Context): DisplayAspect? =
 
 internal fun saveAspect(context: Context, aspect: DisplayAspect) {
     context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).edit().putString(AspectKey, aspect.name).apply()
+}
+
+internal fun loadAppearance(context: Context): KryoAppearance =
+    when (context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).getString(AppearanceKey, null)) {
+        KryoAppearance.LIGHT.name -> KryoAppearance.LIGHT
+        else -> KryoAppearance.DARK
+    }
+
+internal fun saveAppearance(context: Context, appearance: KryoAppearance) {
+    context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).edit().putString(AppearanceKey, appearance.name).apply()
 }
 
 private const val SkipFilePromptKey = "skip_file_prompt"

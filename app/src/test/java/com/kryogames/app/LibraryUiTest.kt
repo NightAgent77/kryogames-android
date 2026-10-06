@@ -148,12 +148,22 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Settings").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_BUTTON_A)
         compose.onNodeWithTag("aspect_16_9").assertIsSelected()
+        compose.onNodeWithTag("game_grid").assertDoesNotExist()
         controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
         compose.onNodeWithTag("aspect_4_3").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("appearance_toggle").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_LEFT)
+        compose.onNodeWithContentDescription("Appearance, dark mode").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithContentDescription("Appearance, light mode").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_LEFT)
+        compose.onNodeWithContentDescription("Appearance, dark mode").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
         compose.onNodeWithContentDescription("Close settings").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_BUTTON_B)
         compose.onNodeWithTag("app_details").assertDoesNotExist()
+        compose.onNodeWithTag("game_grid").assertIsDisplayed()
     }
 
     @Test fun gameInfoMovesBetweenPlayFavoriteAndBack() {
@@ -176,8 +186,8 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithTag("app_details").assertIsDisplayed()
         compose.onNodeWithText("APP DETAILS").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.4").assertIsDisplayed()
-        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithContentDescription("App version 0.0.5").assertIsDisplayed()
+        compose.onNodeWithText("Back").performClick()
         compose.onNodeWithTag("app_details").assertDoesNotExist()
     }
 

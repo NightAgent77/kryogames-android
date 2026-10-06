@@ -40,6 +40,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -197,6 +200,8 @@ fun LibraryScreen(
     onSidebarAction: (String) -> Unit,
     aspect: DisplayAspect? = null,
     onAspect: (DisplayAspect) -> Unit = {},
+    appearance: KryoAppearance = KryoAppearance.DARK,
+    onAppearance: (KryoAppearance) -> Unit = {},
     onToggleFavorite: (Game) -> Unit = {},
     onAddGame: () -> Unit = {},
 ) {
@@ -287,6 +292,14 @@ fun LibraryScreen(
         actionGameId = null
         showingInfo = false
     }
+    fun openSettings() {
+        profileMenuOpen = false
+        addMenuOpen = false
+        closeChoices()
+        sidebarOpen = false
+        settingsOpen = true
+        menuIndex = settingsStartIndex()
+    }
     fun toggleSidebar() {
         sidebarOpen = !sidebarOpen
         if (sidebarOpen) {
@@ -354,8 +367,12 @@ fun LibraryScreen(
             when {
                 dx < 0 && menuIndex == 1 -> menuIndex = 0
                 dx > 0 && menuIndex == 0 -> menuIndex = 1
+                dx < 0 && menuIndex == 2 -> onAppearance(KryoAppearance.DARK)
+                dx > 0 && menuIndex == 2 -> onAppearance(KryoAppearance.LIGHT)
                 dy > 0 && menuIndex < 2 -> menuIndex = 2
-                dy < 0 && menuIndex == 2 -> menuIndex = 0
+                dy > 0 && menuIndex == 2 -> menuIndex = 3
+                dy < 0 && menuIndex == 3 -> menuIndex = 2
+                dy < 0 && menuIndex == 2 -> menuIndex = if (resolvedAspect.value == DisplayAspect.CLASSIC) 1 else 0
             }
             return
         }
@@ -419,6 +436,7 @@ fun LibraryScreen(
             when (menuIndex) {
                 0 -> onAspect(DisplayAspect.WIDESCREEN)
                 1 -> onAspect(DisplayAspect.CLASSIC)
+                2 -> onAppearance(if (appearance == KryoAppearance.DARK) KryoAppearance.LIGHT else KryoAppearance.DARK)
                 else -> settingsOpen = false
             }
             return
@@ -429,11 +447,7 @@ fun LibraryScreen(
                     profileMenuOpen = false
                     onProfile()
                 }
-                1 -> {
-                    profileMenuOpen = false
-                    settingsOpen = true
-                    menuIndex = settingsStartIndex()
-                }
+                1 -> openSettings()
                 else -> {
                     profileMenuOpen = false
                     onSidebarAction("Log out")
@@ -493,11 +507,8 @@ fun LibraryScreen(
                     onSidebarAction("Downloads")
                 }
                 else -> {
-                    profileMenuOpen = false
-                    settingsOpen = true
-                    sidebarOpen = false
                     slotName = ShellSlot.MENU.name
-                    menuIndex = settingsStartIndex()
+                    openSettings()
                 }
             }
         }
@@ -647,11 +658,19 @@ fun LibraryScreen(
             val designH = if (resolved == DisplayAspect.CLASSIC) 720f else 688f
             val m = Metrics(min(animatedW.value / designW, animatedH.value / designH).coerceIn(0.8f, 1.35f))
             val chromeEnabled = !modalOpen && actionGameId == null && !settingsOpen && !profileMenuOpen && !addMenuOpen
-            val menuBlur by animateDpAsState(if (sidebarOpen) 18.dp else 0.dp, motionIn(), label = "menuBlur")
+            val shellBlur by animateDpAsState(
+                when {
+                    sidebarOpen -> 18.dp
+                    actionGameId != null && !showingInfo -> 20.dp
+                    else -> 0.dp
+                },
+                motionIn(),
+                label = "shellBlur",
+            )
             val panelWidth = (animatedW * 0.30f).coerceAtLeast(m.d(220)).coerceAtMost(animatedW * 0.48f)
             Box(Modifier.fillMaxSize()) {
                 BoxWithConstraints(
-                    Modifier.fillMaxSize().then(if (menuBlur >= 0.5.dp) Modifier.blur(menuBlur) else Modifier),
+                    Modifier.fillMaxSize().then(if (shellBlur >= 0.5.dp) Modifier.blur(shellBlur) else Modifier),
                 ) {
                         val narrow = maxWidth < 720.dp && resolved != DisplayAspect.CLASSIC
                         val availableGridWidth = maxWidth - m.d(38)
@@ -711,10 +730,11 @@ fun LibraryScreen(
                                 onProfilePlaced = { rememberAnchor("profile", it) },
                                 onToggleSearch = { toggleSearch() },
                             )
-                            if (section != "Friends" && !showingInfo) {
+                            if (!showingInfo && (settingsOpen || section != "Friends")) {
                                 Spacer(Modifier.height(m.d(16)))
                                 Box(Modifier.padding(start = m.d(8))) {
-                                    Crossfade(section, animationSpec = tween(MotionIn, easing = MotionEase), label = "title") { Title(it, m) }
+                                    val heading = if (settingsOpen) "Settings" else section
+                                    Crossfade(heading, animationSpec = tween(MotionIn, easing = MotionEase), label = "title") { Title(it, m) }
                                 }
                                 Spacer(Modifier.height(m.d(12)))
                             } else {
@@ -722,7 +742,7 @@ fun LibraryScreen(
                             }
                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                 OverlayVisibility(
-                                    visible = section != "Friends" && !showingInfo,
+                                    visible = section != "Friends" && !showingInfo && !settingsOpen,
                                     modifier = Modifier.fillMaxSize(),
                                     enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { -it / 16 },
                                     exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { -it / 16 },
@@ -795,12 +815,30 @@ fun LibraryScreen(
                                     }
                                 }
                                 OverlayVisibility(
-                                    visible = section == "Friends",
+                                    visible = section == "Friends" && !settingsOpen && !showingInfo,
                                     modifier = Modifier.fillMaxSize(),
                                     enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { it / 16 },
                                     exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { it / 16 },
                                 ) {
                                     FriendsPane(m)
+                                }
+                                OverlayVisibility(
+                                    visible = settingsOpen && !showingInfo,
+                                    modifier = Modifier.fillMaxSize(),
+                                    enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { it / 16 },
+                                    exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { it / 16 },
+                                ) {
+                                    CompositionLocalProvider(LocalUiEnabled provides !modalOpen) {
+                                        SettingsPage(
+                                            m = m,
+                                            aspect = resolved,
+                                            appearance = appearance,
+                                            selectedIndex = menuIndex,
+                                            onAspect = onAspect,
+                                            onAppearance = onAppearance,
+                                            onDismiss = { settingsOpen = false },
+                                        )
+                                    }
                                 }
                                 OverlayVisibility(
                                     visible = showingInfo && actionGame != null,
@@ -868,12 +906,7 @@ fun LibraryScreen(
                         sidebarOpen = false
                         onSidebarAction("Downloads")
                     },
-                    onSettings = {
-                        profileMenuOpen = false
-                        settingsOpen = true
-                        sidebarOpen = false
-                        menuIndex = settingsStartIndex()
-                    },
+                    onSettings = { openSettings() },
                 )
             }
 
@@ -911,23 +944,12 @@ fun LibraryScreen(
                     profileMenuOpen = false
                     onProfile()
                 },
-                onSettings = {
-                    profileMenuOpen = false
-                    settingsOpen = true
-                    menuIndex = settingsStartIndex()
-                },
+                onSettings = { openSettings() },
                 onLogOut = {
                     profileMenuOpen = false
                     onSidebarAction("Log out")
                 },
                 onDismiss = { profileMenuOpen = false },
-            )
-            SettingsLayer(
-                visible = settingsOpen,
-                aspect = resolved,
-                selectedIndex = menuIndex,
-                onAspect = onAspect,
-                onDismiss = { settingsOpen = false },
             )
         }
     }
@@ -1289,8 +1311,9 @@ private fun HeaderIcon(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
+    val emphasized = active || highlighted
     val tint by androidx.compose.animation.animateColorAsState(
-        if (active) KryoColors.Accent else KryoColors.Muted,
+        if (emphasized) KryoColors.Accent else KryoColors.Muted,
         tween(MotionIn, easing = MotionEase),
         label = "headerIcon",
     )
@@ -1299,14 +1322,33 @@ private fun HeaderIcon(
         tween(MotionIn, easing = MotionEase),
         label = "headerLine",
     )
+    val iconScale by animateFloatAsState(if (highlighted) 1.16f else 1f, tween(MotionIn, easing = MotionEase), label = "headerIconScale")
+    val shown = if (emphasized) {
+        when (label) {
+            "Discover" -> Icons.Filled.Explore
+            "Library" -> Icons.Filled.VideoLibrary
+            else -> Icons.Filled.Star
+        }
+    } else {
+        icon
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         FocusBox(
             Modifier.size(m.d(44).coerceAtLeast(40.dp)).then(modifier),
             label,
+            boxed = false,
             highlighted = highlighted,
             onClick = onClick,
         ) {
-            Icon(icon, null, tint = tint, modifier = Modifier.size(m.d(22)))
+            Icon(
+                shown,
+                null,
+                tint = tint,
+                modifier = Modifier.size(m.d(22)).graphicsLayer {
+                    scaleX = iconScale
+                    scaleY = iconScale
+                },
+            )
         }
         Box(Modifier.width(m.d(22)).height(2.dp).background(underline))
     }
@@ -1335,7 +1377,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
         when {
             focused || pinned || highlighted -> KryoColors.Accent
             hovered -> Color(0xFF8FA0B3)
-            else -> Color(0xFF1F272D)
+            else -> KryoColors.CardEdge
         },
         tween(180, easing = MotionEase),
         label = "cardBorder",
@@ -1365,7 +1407,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
                 }
             }
             .clip(shape)
-            .background(Brush.verticalGradient(listOf(Color(0xFF1B2025), Color(0xFF14191D))))
+            .background(Brush.verticalGradient(listOf(KryoColors.CardTop, KryoColors.CardBottom)))
             .border(if (focused || pinned || highlighted) 3.dp else 1.dp, borderColor, shape)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = { if (enabled) onSelect() })
             .semantics {
@@ -1422,6 +1464,7 @@ internal fun FocusBox(
     outlined: Boolean = false,
     filled: Boolean = false,
     marked: Boolean = false,
+    boxed: Boolean = true,
     highlighted: Boolean = false,
     onClick: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
@@ -1430,8 +1473,9 @@ internal fun FocusBox(
     val shape = RoundedCornerShape(7.dp)
     val enabled = LocalUiEnabled.current
     val frosted = LocalFrosted.current
-    val ring = focused || highlighted
-    val showFill = filled || outlined || ring || marked
+    val armed = focused || highlighted
+    val ring = boxed && armed
+    val showFill = boxed && (filled || outlined || armed || marked)
     val border by androidx.compose.animation.animateColorAsState(
         when {
             ring -> KryoColors.Accent
@@ -1463,7 +1507,7 @@ internal fun FocusBox(
             } else true
         }.onFocusChanged { focused = it.isFocused }.clip(shape)
             .background(fill)
-            .border(if (ring || marked) 2.dp else 1.dp, border, shape)
+            .border(if (!boxed) 0.dp else if (ring || marked) 2.dp else 1.dp, border, shape)
             .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
             .semantics {
                 contentDescription = description
@@ -1502,8 +1546,8 @@ private fun GameChoiceLayer(
     val current = shown
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val menuWidth = 152.dp
-        val estimatedHeight = if (menuSize.height > 0) with(density) { menuSize.height.toDp() } else 118.dp
+        val menuWidth = 184.dp
+        val estimatedHeight = if (menuSize.height > 0) with(density) { menuSize.height.toDp() } else 156.dp
         val place = with(density) {
             val widthPx = menuWidth.toPx()
             val heightPx = estimatedHeight.toPx()
@@ -1513,19 +1557,20 @@ private fun GameChoiceLayer(
                 placeGameMenu(
                     anchor.left, anchor.top, anchor.right, anchor.bottom,
                     maxWidth.toPx(), maxHeight.toPx(), widthPx, heightPx,
+                    gap = 14f,
                 )
             }
         }
         val origin = if (place.placeOnLeft) TransformOrigin(1f, 0.5f) else TransformOrigin(0f, 0.5f)
-        AnimatedVisibility(visible = visible, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(140)), exit = fadeOut(tween(120))) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)).pointerInput(Unit) { detectTapGestures { onDismiss() } })
+        AnimatedVisibility(visible = visible, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(180)), exit = fadeOut(tween(140))) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)).pointerInput(Unit) { detectTapGestures { onDismiss() } })
         }
         AnimatedVisibility(
             visible = visible && current != null,
             modifier = Modifier.offset { IntOffset(place.x.roundToInt(), place.y.roundToInt()) },
-            enter = fadeIn(motionIn()) + scaleIn(initialScale = 0.92f, animationSpec = motionIn(), transformOrigin = origin) +
-                slideInHorizontally(motionIn()) { if (place.placeOnLeft) it / 5 else -it / 5 },
-            exit = fadeOut(motionOut()) + scaleOut(targetScale = 0.96f, animationSpec = motionOut(), transformOrigin = origin),
+            enter = fadeIn(tween(200)) + scaleIn(initialScale = 0.72f, animationSpec = tween(260, easing = MotionEase), transformOrigin = origin) +
+                slideInHorizontally(tween(260, easing = MotionEase)) { if (place.placeOnLeft) it / 3 else -it / 3 },
+            exit = fadeOut(motionOut()) + scaleOut(targetScale = 0.9f, animationSpec = motionOut(), transformOrigin = origin),
         ) {
             val playFocus = remember { FocusRequester() }
             val infoFocus = remember { FocusRequester() }
@@ -1536,17 +1581,17 @@ private fun GameChoiceLayer(
             Column(
                 Modifier.width(menuWidth)
                     .onSizeChanged(onMenuSize)
-                    .shadow(16.dp, RoundedCornerShape(10.dp))
-                    .clip(RoundedCornerShape(10.dp))
+                    .shadow(28.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f), spotColor = Color.Black.copy(alpha = 0.45f))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(KryoColors.Surface)
-                    .border(1.dp, KryoColors.Border, RoundedCornerShape(10.dp))
+                    .border(1.dp, KryoColors.Border, RoundedCornerShape(16.dp))
                     .pointerInput(Unit) { detectTapGestures { } }
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
             ) {
-                Text(shownGame.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(6.dp))
+                Text(shownGame.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(10.dp))
                 FocusBox(
-                    Modifier.fillMaxWidth().height(34.dp).focusRequester(playFocus).focusProperties {
+                    Modifier.fillMaxWidth().height(44.dp).focusRequester(playFocus).focusProperties {
                         down = infoFocus
                         up = FocusRequester.Cancel
                         left = FocusRequester.Cancel
@@ -1557,11 +1602,11 @@ private fun GameChoiceLayer(
                     highlighted = selectedRow == 0,
                     onClick = { onPlay(shownGame) },
                 ) {
-                    Text("Play", color = KryoColors.Text, fontSize = 13.sp)
+                    Text("Play", color = KryoColors.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 FocusBox(
-                    Modifier.fillMaxWidth().height(34.dp).focusRequester(infoFocus).focusProperties {
+                    Modifier.fillMaxWidth().height(44.dp).focusRequester(infoFocus).focusProperties {
                         up = playFocus
                         down = FocusRequester.Cancel
                         left = FocusRequester.Cancel
@@ -1572,7 +1617,7 @@ private fun GameChoiceLayer(
                     highlighted = selectedRow == 1,
                     onClick = onInfo,
                 ) {
-                    Text("Info", color = KryoColors.Text, fontSize = 13.sp)
+                    Text("Info", color = KryoColors.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -1889,7 +1934,7 @@ private fun ProfileMenuLayer(
                     highlighted = index == selectedRow,
                     onClick = item.action,
                 ) {
-                    Text(item.label, color = if (item.label == "Log out") Color(0xFFF0A0A0) else KryoColors.Text, fontSize = 14.sp)
+                    Text(item.label, color = if (item.label == "Log out") KryoColors.Danger else KryoColors.Text, fontSize = 14.sp)
                 }
             }
         }
@@ -1897,90 +1942,163 @@ private fun ProfileMenuLayer(
 }
 
 @Composable
-private fun SettingsLayer(visible: Boolean, aspect: DisplayAspect, selectedIndex: Int, onAspect: (DisplayAspect) -> Unit, onDismiss: () -> Unit) {
-    AnimatedVisibility(visible = visible, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(160)), exit = fadeOut(tween(140))) {
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.46f)).pointerInput(Unit) { detectTapGestures { onDismiss() } })
-    }
-    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(motionIn()) + scaleIn(initialScale = 0.96f, animationSpec = motionIn()) + slideInVertically(motionIn()) { it / 10 },
-            exit = fadeOut(motionOut()) + scaleOut(targetScale = 0.98f, animationSpec = motionOut()) + slideOutVertically(motionOut()) { it / 12 },
-        ) {
-            val wide = remember { FocusRequester() }
-            val classic = remember { FocusRequester() }
-            val close = remember { FocusRequester() }
-            LaunchedEffect(aspect) {
-                (if (aspect == DisplayAspect.CLASSIC) classic else wide).bringIntoFocus()
-            }
-            Column(
-                Modifier.widthIn(max = 440.dp).fillMaxWidth(0.86f)
-                    .heightIn(max = maxHeight * 0.9f)
-                    .shadow(20.dp, RoundedCornerShape(14.dp))
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(KryoColors.Surface)
-                    .border(1.dp, KryoColors.Border, RoundedCornerShape(14.dp))
-                    .verticalScroll(rememberScrollState())
-                    .pointerInput(Unit) { detectTapGestures { } }
-                    .padding(22.dp),
-            ) {
-                Text("Settings", color = KryoColors.Text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                Text("Display and this build.", color = KryoColors.Muted, fontSize = 14.sp)
-                Spacer(Modifier.height(18.dp))
-                Text("ASPECT RATIO", color = KryoColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AspectChoice("16:9", aspect == DisplayAspect.WIDESCREEN, selectedIndex == 0, Modifier.weight(1f).focusRequester(wide).focusProperties {
+private fun SettingsPage(
+    m: Metrics,
+    aspect: DisplayAspect,
+    appearance: KryoAppearance,
+    selectedIndex: Int,
+    onAspect: (DisplayAspect) -> Unit,
+    onAppearance: (KryoAppearance) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val wide = remember { FocusRequester() }
+    val classic = remember { FocusRequester() }
+    val theme = remember { FocusRequester() }
+    val close = remember { FocusRequester() }
+    val light = appearance == KryoAppearance.LIGHT
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(end = m.d(8)),
+        verticalArrangement = Arrangement.spacedBy(m.d(14)),
+    ) {
+        SettingsLabel("Display", m)
+        SettingsCard(m) {
+            Text("Aspect ratio", color = KryoColors.Text, fontSize = m.t(16), fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(m.d(4)))
+            Text(
+                "4:3 fills handhelds like the Retroid Pocket Nova. 16:9 fills phones and televisions.",
+                color = KryoColors.Muted,
+                fontSize = m.t(13),
+                lineHeight = m.t(18),
+            )
+            Spacer(Modifier.height(m.d(12)))
+            Row(horizontalArrangement = Arrangement.spacedBy(m.d(10))) {
+                AspectChoice(
+                    "16:9",
+                    aspect == DisplayAspect.WIDESCREEN,
+                    selectedIndex == 0,
+                    Modifier.weight(1f).focusRequester(wide).focusProperties {
                         right = classic
-                        down = close
-                    }.testTag("aspect_16_9")) { onAspect(DisplayAspect.WIDESCREEN) }
-                    AspectChoice("4:3", aspect == DisplayAspect.CLASSIC, selectedIndex == 1, Modifier.weight(1f).focusRequester(classic).focusProperties {
+                        down = theme
+                    }.testTag("aspect_16_9"),
+                ) { onAspect(DisplayAspect.WIDESCREEN) }
+                AspectChoice(
+                    "4:3",
+                    aspect == DisplayAspect.CLASSIC,
+                    selectedIndex == 1,
+                    Modifier.weight(1f).focusRequester(classic).focusProperties {
                         left = wide
-                        down = close
-                    }.testTag("aspect_4_3")) { onAspect(DisplayAspect.CLASSIC) }
-                }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "4:3 fills the Retroid Pocket Nova. 16:9 fills phones and televisions.",
-                    color = KryoColors.Muted,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                )
-                Spacer(Modifier.height(18.dp))
-                Text("APP DETAILS", color = KryoColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(KryoColors.Background)
-                        .border(1.dp, KryoColors.Border, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                        .testTag("app_details"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text("KryoGames", color = KryoColors.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(2.dp))
-                        Text("Version", color = KryoColors.Muted, fontSize = 12.sp)
-                    }
-                    Text(
-                        BuildConfig.VERSION_NAME,
-                        color = KryoColors.Text,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.semantics { contentDescription = "App version ${BuildConfig.VERSION_NAME}" },
-                    )
-                }
-                Spacer(Modifier.height(18.dp))
-                FocusBox(Modifier.fillMaxWidth().height(44.dp).focusRequester(close).focusProperties {
-                    up = if (aspect == DisplayAspect.CLASSIC) classic else wide
-                }, "Close settings", outlined = true, highlighted = selectedIndex == 2, onClick = onDismiss) {
-                    Text("Close", color = KryoColors.Text, fontSize = 15.sp)
-                }
+                        down = theme
+                    }.testTag("aspect_4_3"),
+                ) { onAspect(DisplayAspect.CLASSIC) }
             }
         }
+        FocusBox(
+            Modifier.fillMaxWidth().focusRequester(theme).focusProperties {
+                up = if (aspect == DisplayAspect.CLASSIC) classic else wide
+                down = close
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+            }.testTag("appearance_toggle"),
+            if (light) "Appearance, light mode" else "Appearance, dark mode",
+            outlined = true,
+            highlighted = selectedIndex == 2,
+            onClick = { onAppearance(if (light) KryoAppearance.DARK else KryoAppearance.LIGHT) },
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = m.d(14), vertical = m.d(12)),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(m.d(12)),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Appearance", color = KryoColors.Text, fontSize = m.t(16), fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(m.d(2)))
+                    Text(
+                        if (light) "Light" else "Dark",
+                        color = if (selectedIndex == 2) KryoColors.Accent else KryoColors.Muted,
+                        fontSize = m.t(13),
+                    )
+                }
+                AppearanceSwitch(light = light, m = m)
+            }
+        }
+        SettingsLabel("About", m)
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(m.d(12)))
+                .background(KryoColors.Surface)
+                .border(1.dp, KryoColors.Border, RoundedCornerShape(m.d(12)))
+                .padding(horizontal = m.d(16), vertical = m.d(14))
+                .testTag("app_details"),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = m.d(12))) {
+                Text("KryoGames", color = KryoColors.Text, fontSize = m.t(16), fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(m.d(2)))
+                Text("APP DETAILS", color = KryoColors.Muted, fontSize = m.t(12), fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp)
+            }
+            Text(
+                BuildConfig.VERSION_NAME,
+                color = KryoColors.Text,
+                fontSize = m.t(16),
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.semantics { contentDescription = "App version ${BuildConfig.VERSION_NAME}" },
+            )
+        }
+        FocusBox(
+            Modifier.fillMaxWidth().height(m.d(48).coerceAtLeast(44.dp)).focusRequester(close).focusProperties {
+                up = theme
+                down = FocusRequester.Cancel
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+            },
+            "Close settings",
+            outlined = true,
+            highlighted = selectedIndex == 3,
+            onClick = onDismiss,
+        ) {
+            Text("Back", color = KryoColors.Text, fontSize = m.t(15), fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun SettingsLabel(text: String, m: Metrics) {
+    Text(
+        text.uppercase(),
+        color = KryoColors.Muted,
+        fontSize = m.t(12),
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.sp,
+    )
+}
+
+@Composable
+private fun SettingsCard(m: Metrics, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(m.d(12)))
+            .background(KryoColors.Surface)
+            .border(1.dp, KryoColors.Border, RoundedCornerShape(m.d(12)))
+            .padding(m.d(16)),
+        content = content,
+    )
+}
+
+@Composable
+private fun AppearanceSwitch(light: Boolean, m: Metrics) {
+    val travel by animateDpAsState(if (light) m.d(22) else 0.dp, motionIn(), label = "appearanceThumb")
+    val track by androidx.compose.animation.animateColorAsState(
+        if (light) KryoColors.Accent else KryoColors.Border,
+        tween(MotionIn, easing = MotionEase),
+        label = "appearanceTrack",
+    )
+    Box(
+        Modifier.width(m.d(52)).height(m.d(30))
+            .background(track, RoundedCornerShape(m.d(15)))
+            .padding(m.d(3)),
+    ) {
+        Box(Modifier.offset(x = travel).size(m.d(24)).background(Color.White, CircleShape))
     }
 }
 
@@ -2025,7 +2143,7 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, highlighted: Boolean, on
                 if (it.isFocused) onFocused()
             }
             .clip(shape)
-            .background(Color(0xFF14191D))
+            .background(KryoColors.CardBottom)
             .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
             .semantics {
                 contentDescription = "Add a game"
