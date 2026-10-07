@@ -40,6 +40,37 @@ class LibraryUiTest {
         compose.waitForIdle()
     }
 
+    @Test fun catalogKeepsTheGameNameAndRejectsPathsThatLeaveTheFolder() {
+        val games = parseCatalog(
+            """{"games":[{"id":"pong-rullete","title":"Pong Rullete","type":"2D, Arcade","entry":"index.html","files":["index.html","../secret.js","assets/sounds/hover.wav"]}]}""",
+        )
+        assertEquals(1, games.size)
+        assertEquals("Pong Rullete", games[0].title)
+        assertEquals("2D, Arcade", games[0].type)
+        assertEquals(listOf("index.html", "assets/sounds/hover.wav"), games[0].files)
+    }
+
+    @Test fun downloadsPageStartsEmpty() {
+        controllerButton(KeyEvent.KEYCODE_DPAD_LEFT)
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithTag("downloads_empty").assertExists()
+        compose.onNodeWithText("Nothing downloaded yet.").assertExists()
+    }
+
+    @Test fun finishedDownloadRecordKeepsTheTitleSizeAndTime() {
+        val raw = encodeFinishedDownloads(
+            listOf(FinishedDownload("pong-rullete", "Pong Rullete", 4_300_000, 1_760_000_000_000)),
+        )
+        val decoded = decodeFinishedDownloads(raw)
+        assertEquals(1, decoded.size)
+        assertEquals("Pong Rullete", decoded[0].title)
+        assertEquals(4_300_000L, decoded[0].bytes)
+        assertEquals(1_760_000_000_000L, decoded[0].finishedAt)
+    }
+
     @Test fun dpadAndStickDirectionsMoveFocus() {
         compose.onNodeWithTag("game_maze-ops").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
@@ -50,6 +81,8 @@ class LibraryUiTest {
         compose.onNodeWithTag("section_library").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_LEFT)
         compose.onNodeWithTag("section_discover").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.onNodeWithTag("section_library").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
         compose.onNodeWithTag("game_maze-ops").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_BUTTON_A)

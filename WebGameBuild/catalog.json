@@ -1,0 +1,35 @@
+{
+  "games": [
+    {
+      "id": "pong-rullete",
+      "title": "Pong Rullete",
+      "type": "2D, Arcade",
+      "entry": "index.html",
+      "files": [
+        "index.html",
+        "pong-rullete.js",
+        "q5.js",
+        "q5play.js",
+        "Box2D.deluxe.mjs",
+        "Box2D.deluxe.wasm",
+        "assets/mainMenu.jpeg",
+        "assets/gameBackground.jpeg",
+        "assets/sounds/hover.wav",
+        "assets/sounds/buttonSelected.wav",
+        "assets/sprites/pong_rullet_title.png",
+        "assets/sprites/new_game_default.png",
+        "assets/sprites/new_game_selected.png",
+        "assets/sprites/multiplayer_default.png",
+        "assets/sprites/multiplayer_selected.png",
+        "assets/sprites/settings_default.png",
+        "assets/sprites/settings_selected.png",
+        "assets/sprites/continue_default.png",
+        "assets/sprites/continue_selected.png",
+        "assets/sprites/exit_default.png",
+        "assets/sprites/exit_selected.png",
+        "assets/sprites/mainMenuDefault.png",
+        "assets/sprites/mainMenuSelected.png"
+      ]
+    }
+  ]
+}

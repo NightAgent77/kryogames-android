@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,8 +73,16 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
     var aspectName by rememberSaveable { mutableStateOf(loadAspect(context)?.name) }
     var appearanceName by rememberSaveable { mutableStateOf(loadAppearance(context).name) }
     var imported by remember { mutableStateOf(loadStoredImports(context)) }
-    val games = remember(favoriteIds, imported, removedIds) {
-        (DemoGames.all.filter { it.id !in removedIds } + imported.map { it.asGame() })
+    var catalog by remember { mutableStateOf<List<CatalogGame>>(emptyList()) }
+    var installedStamp by remember { mutableIntStateOf(0) }
+    var liveTransfer by remember { mutableStateOf<LiveTransfer?>(null) }
+    var transferTicket by remember { mutableStateOf<TransferTicket?>(null) }
+    var finishedDownloads by remember { mutableStateOf(loadFinishedDownloads(context)) }
+    val storeGames = remember(catalog, installedStamp, favoriteIds) {
+        catalog.map { it.asLibraryGame(context).copy(favorite = it.id in favoriteIds) }
+    }
+    val games = remember(favoriteIds, imported, removedIds, storeGames) {
+        (DemoGames.all.filter { it.id !in removedIds } + imported.map { it.asGame() } + storeGames.filter { it.installed })
             .map { it.copy(favorite = it.id in favoriteIds) }
     }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
@@ -159,13 +168,67 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             releaseStoredImport(context, stored)
             return
         }
+        if (deleteDownloadedGame(context, game.id)) {
+            finishedDownloads = forgetFinishedDownload(context, game.id)
+            installedStamp++
+            return
+        }
         val nextRemoved = (removedIds + game.id).distinct()
         removedIds = nextRemoved
         saveRemovedGameIds(context, nextRemoved.toSet())
     }
+    fun install(game: Game) {
+        val spec = catalog.firstOrNull { it.id == game.id } ?: return
+        if (liveTransfer != null || game.installed) return
+        val ticket = TransferTicket()
+        transferTicket = ticket
+        scope.launch {
+            liveTransfer = LiveTransfer(game.id, game.title, 0L, 0L, 0L)
+            val result = runCatching {
+                downloadCatalogGame(context, spec, ticket) { snap ->
+                    liveTransfer = LiveTransfer(game.id, game.title, snap.received, snap.total, snap.bytesPerSecond)
+                }
+            }
+            transferTicket = null
+            val error = result.exceptionOrNull()
+            when {
+                error is TransferStopped -> liveTransfer = null
+                error != null -> {
+                    liveTransfer = null
+                    overlay = Overlay.Message("Install", error.message ?: "The download stopped.")
+                }
+                else -> {
+                    val bytes = folderSize(downloadedGameDir(context, game.id))
+                    finishedDownloads = rememberFinishedDownload(
+                        context,
+                        FinishedDownload(game.id, game.title, bytes, System.currentTimeMillis()),
+                    )
+                    installedStamp++
+                    liveTransfer = LiveTransfer(game.id, game.title, bytes, bytes.coerceAtLeast(1L), 0L, settling = true)
+                    delay(420)
+                    val showing = liveTransfer
+                    if (showing?.id == game.id && showing.settling) liveTransfer = null
+                }
+            }
+        }
+    }
+    fun stopDownload() {
+        transferTicket?.stopped = true
+    }
     BackHandler(enabled = overlay != null) { overlay = null }
     Box(Modifier.fillMaxSize()) {
-        LibraryScreen(games = games, controllerActions = controllerActions, modalOpen = overlay != null,
+        LibraryScreen(games = games, discoverGames = storeGames, controllerActions = controllerActions, modalOpen = overlay != null,
+            installingId = liveTransfer?.takeUnless { it.settling }?.id,
+            liveTransfer = liveTransfer,
+            finishedDownloads = finishedDownloads,
+            onStopDownload = ::stopDownload,
+            onInstall = ::install,
+            onOpenDiscover = {
+                if (catalog.isNotEmpty() || catalogLoadSkipped()) return@LibraryScreen
+                scope.launch {
+                    catalog = runCatching { fetchCatalog() }.getOrDefault(emptyList())
+                }
+            },
             online = online,
             aspect = aspectName?.let { runCatching { DisplayAspect.valueOf(it) }.getOrNull() },
             onPlay = ::play,
@@ -193,10 +256,6 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             onExit = { activity?.finishAndRemoveTask() },
             onSidebarAction = { name ->
                 overlay = when (name) {
-                    "Downloads" -> Overlay.Message(
-                        "Downloads",
-                        "Installed demo entries:\n" + games.filter { it.installed }.joinToString("\n") { it.title }.ifBlank { "Nothing installed yet." },
-                    )
                     "Log out" -> Overlay.Message("Log out", "Sign-in isn't connected on this device yet.")
                     else -> Overlay.Message(name, "This section is ready for a later update.")
                 }
@@ -357,6 +416,13 @@ internal fun saveRemovedGameIds(context: Context, ids: Set<String>) {
         .edit()
         .putStringSet(RemovedGamesKey, HashSet(ids))
         .commit()
+}
+
+internal fun catalogLoadSkipped(): Boolean = try {
+    Class.forName("org.robolectric.Robolectric")
+    true
+} catch (_: ClassNotFoundException) {
+    false
 }
 
 private const val SkipFilePromptKey = "skip_file_prompt"

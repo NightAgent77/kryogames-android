@@ -110,7 +110,7 @@ import kotlin.math.roundToInt
 
 internal val LocalUiEnabled = compositionLocalOf { true }
 private val LocalFrosted = compositionLocalOf { false }
-private data class Metrics(val scale: Float) {
+internal data class Metrics(val scale: Float) {
     fun d(value: Int): Dp = (value * scale).dp
     fun t(value: Int, minimum: Int = 11): TextUnit = (value * scale).coerceAtLeast(minimum.toFloat()).sp
 }
@@ -202,6 +202,7 @@ internal fun placeGameMenu(
 @Composable
 fun LibraryScreen(
     games: List<Game>,
+    discoverGames: List<Game> = emptyList(),
     controllerActions: Flow<ControllerAction> = emptyFlow(),
     username: String = "Kidxpr",
     online: Boolean = true,
@@ -217,6 +218,12 @@ fun LibraryScreen(
     onAppearance: (KryoAppearance) -> Unit = {},
     onToggleFavorite: (Game) -> Unit = {},
     onDelete: (Game) -> Unit = {},
+    onInstall: (Game) -> Unit = {},
+    installingId: String? = null,
+    liveTransfer: LiveTransfer? = null,
+    finishedDownloads: List<FinishedDownload> = emptyList(),
+    onStopDownload: () -> Unit = {},
+    onOpenDiscover: () -> Unit = {},
     onAddGame: () -> Unit = {},
     onExit: () -> Unit = {},
 ) {
@@ -249,9 +256,11 @@ fun LibraryScreen(
     var firstFocusPlaced by remember { mutableStateOf(false) }
     val searchPhase = SearchPhase.valueOf(searchPhaseName)
     val filter = LibraryFilter.valueOf(filterName)
-    val visible = remember(games, filter, section, query) {
+    val offersAddSlot = section != "Discover"
+    val visible = remember(games, discoverGames, filter, section, query) {
+        val source = if (section == "Discover") discoverGames else games
         val effective = if (section == "Favorites") LibraryFilter.FAVORITES else filter
-        filterGames(games, effective, query)
+        filterGames(source, effective, query)
     }
     val ids = visible.map { it.id }
     val cardFocus = remember(ids) { ids.associateWith { FocusRequester() } }
@@ -260,7 +269,8 @@ fun LibraryScreen(
     val gridState = rememberLazyGridState()
     val keyboard = LocalSoftwareKeyboardController.current
     val selectedGame = games.firstOrNull { it.id == lastFocusedGameId } ?: visible.firstOrNull()
-    val actionGame = games.firstOrNull { it.id == actionGameId }
+    val actionGame = discoverGames.firstOrNull { it.id == actionGameId } ?: games.firstOrNull { it.id == actionGameId }
+    val choiceLast = if (actionGame?.installed == true) ChoiceLast else 1
     val anchors = remember { mutableStateMapOf<String, Rect>() }
     var frameCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val shellBlocked = profileMenuOpen || addMenuOpen || actionGameId != null || showingInfo || modalOpen
@@ -347,7 +357,17 @@ fun LibraryScreen(
         gridIndex = 0
         if (next == "Favorites") filterName = LibraryFilter.FAVORITES.name
         else if (next == "Library" || next == "Discover") filterName = LibraryFilter.ALL.name
+        if (next == "Discover") onOpenDiscover()
         if (next == "Friends" && slotName == ShellSlot.GRID.name) slotName = ShellSlot.LIBRARY.name
+    }
+    fun openDownloads() {
+        section = "Downloads"
+        profileMenuOpen = false
+        closeChoices()
+        closeSettings()
+        sidebarOpen = false
+        menuIndex = 0
+        slotName = ShellSlot.PAGE.name
     }
     fun closeSearch() {
         searchPhaseName = SearchPhase.Closed.name
@@ -370,6 +390,7 @@ fun LibraryScreen(
     }
     val restoreFocus = rememberUpdatedState {
         when {
+            section == "Downloads" -> true
             section == "Friends" -> menuFocus.requestSafe()
             searchPhase != SearchPhase.Closed -> searchFocus.requestSafe()
             focusOnAdd || ids.isEmpty() -> addFocus.requestSafe() || menuFocus.requestSafe()
@@ -457,6 +478,7 @@ fun LibraryScreen(
             }
         }
         if (settingsOpen && slot == ShellSlot.PAGE) return moveSettings(dx, dy)
+        if (section == "Downloads" && slot == ShellSlot.PAGE) return NavCue.Limit
         if (profileMenuOpen) {
             return when {
                 dy < 0 && menuIndex > 0 -> {
@@ -473,7 +495,7 @@ fun LibraryScreen(
         if (addMenuOpen) return NavCue.Limit
         if (actionGameId != null) {
             if (dy == 0) return NavCue.Limit
-            val next = (choiceRow + dy).coerceIn(0, ChoiceLast)
+            val next = (choiceRow + dy).coerceIn(0, choiceLast)
             return if (next == choiceRow) NavCue.Limit else {
                 choiceRow = next
                 NavCue.Move
@@ -481,7 +503,7 @@ fun LibraryScreen(
         }
         return when (slot) {
             ShellSlot.GRID -> {
-                val count = visible.size + 1
+                val count = visible.size + if (offersAddSlot) 1 else 0
                 val current = gridIndex.coerceIn(0, (count - 1).coerceAtLeast(0))
                 val next = gridNeighbor(current, count, layoutColumns[0].coerceAtLeast(1), dx, dy)
                 when {
@@ -539,6 +561,9 @@ fun LibraryScreen(
                 } else if (dy > 0 && settingsOpen) {
                     slotName = ShellSlot.PAGE.name
                     NavCue.Move
+                } else if (dy > 0 && section == "Downloads") {
+                    slotName = ShellSlot.PAGE.name
+                    NavCue.Move
                 } else if (dy > 0 && section != "Friends") {
                     slotName = ShellSlot.GRID.name
                     NavCue.Move
@@ -559,9 +584,12 @@ fun LibraryScreen(
             val game = actionGame ?: return false
             when (menuIndex) {
                 0 -> closeChoices()
-                1 -> {
+                1 -> if (game.installed) {
                     closeChoices()
                     onPlay(game)
+                } else if (installingId != game.id) {
+                    showingInfo = false
+                    onInstall(game)
                 }
                 else -> onToggleFavorite(game)
             }
@@ -594,15 +622,20 @@ fun LibraryScreen(
             onAddGame()
             return true
         }
+        if (section == "Downloads" && slot == ShellSlot.PAGE && !settingsOpen) {
+            val transfer = liveTransfer
+            if (transfer != null && !transfer.settling) onStopDownload()
+            return true
+        }
         if (actionGameId != null) {
             val game = actionGame ?: return false
             when (choiceRow) {
-                0 -> {
+                0 -> if (game.installed) {
                     closeChoices()
                     onPlay(game)
-                }
+                } else if (installingId != game.id) onInstall(game)
                 1 -> openInfo(game)
-                else -> {
+                else -> if (game.installed) {
                     closeChoices()
                     onDelete(game)
                 }
@@ -621,7 +654,7 @@ fun LibraryScreen(
                 if (profileMenuOpen) menuIndex = 0
             }
             ShellSlot.GRID -> {
-                if (gridIndex >= visible.size) {
+                if (offersAddSlot && gridIndex >= visible.size) {
                     profileMenuOpen = false
                     closeSettings()
                     closeChoices()
@@ -643,11 +676,7 @@ fun LibraryScreen(
                     sidebarOpen = false
                     slotName = ShellSlot.LIBRARY.name
                 }
-                2 -> {
-                    sidebarOpen = false
-                    slotName = ShellSlot.MENU.name
-                    onSidebarAction("Downloads")
-                }
+                2 -> openDownloads()
                 3 -> openSettings()
                 else -> onExit()
             }
@@ -742,7 +771,7 @@ fun LibraryScreen(
             restoreFocus.value.invoke()
         }
     }
-    BackHandler(enabled = !modalOpen && (settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || section == "Friends" || searchPhase != SearchPhase.Closed || sidebarOpen)) {
+    BackHandler(enabled = !modalOpen && (settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || section == "Friends" || section == "Downloads" || searchPhase != SearchPhase.Closed || sidebarOpen)) {
         when {
             addMenuOpen -> addMenuOpen = false
             profileMenuOpen -> profileMenuOpen = false
@@ -753,7 +782,10 @@ fun LibraryScreen(
                 if (slotName == ShellSlot.RAIL.name) slotName = ShellSlot.MENU.name
             }
             settingsOpen -> closeSettings()
-            section == "Friends" -> applySection("Library")
+            section == "Friends" || section == "Downloads" -> {
+                applySection("Library")
+                slotName = ShellSlot.GRID.name
+            }
         }
         UiCue.back()
     }
@@ -841,12 +873,13 @@ fun LibraryScreen(
                         val libraryDown = when {
                             section == "Friends" -> menuFocus
                             visible.isNotEmpty() -> cardFocus.getValue(visible.first().id)
-                            else -> addFocus
+                            offersAddSlot -> addFocus
+                            else -> sectionFocus[HeaderSections.indexOf(section).coerceAtLeast(0)]
                         }
-                        val slotCount = visible.size + 1
+                        val slotCount = visible.size + if (offersAddSlot) 1 else 0
                         fun slotTarget(index: Int): FocusRequester? = when {
                             index !in 0 until slotCount -> null
-                            index == visible.size -> addFocus
+                            offersAddSlot && index == visible.size -> addFocus
                             else -> cardFocus[visible[index].id]
                         }
                         fun slotLink(index: Int, dx: Int, dy: Int): FocusRequester {
@@ -860,7 +893,8 @@ fun LibraryScreen(
                             }
                         }
                         CompositionLocalProvider(LocalUiEnabled provides chromeEnabled, LocalFrosted provides showingInfo) {
-                        Column(Modifier.fillMaxSize().padding(start = m.d(18), end = m.d(20), top = m.d(20))) {
+                        val trayReserve by animateDpAsState(if (liveTransfer != null) m.d(92) else 0.dp, tween(200), label = "trayReserve")
+                        Column(Modifier.fillMaxSize().padding(start = m.d(18), end = m.d(20), top = m.d(20), bottom = trayReserve)) {
                             Header(
                                 m = m,
                                 narrow = narrow,
@@ -886,7 +920,7 @@ fun LibraryScreen(
                                 onProfilePlaced = { rememberAnchor("profile", it) },
                                 onToggleSearch = { toggleSearch() },
                             )
-                            if (!showingInfo && (settingsOpen || section != "Friends")) {
+                            if (!showingInfo && (settingsOpen || (section != "Friends" && section != "Downloads"))) {
                                 Spacer(Modifier.height(m.d(16)))
                                 Box(Modifier.padding(start = m.d(8))) {
                                     val heading = if (settingsOpen) "Settings" else section
@@ -898,7 +932,7 @@ fun LibraryScreen(
                             }
                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                 OverlayVisibility(
-                                    visible = section != "Friends" && !showingInfo && !settingsOpen,
+                                    visible = section != "Friends" && section != "Downloads" && !showingInfo && !settingsOpen,
                                     modifier = Modifier.fillMaxSize(),
                                     enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { -it / 16 },
                                     exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { -it / 16 },
@@ -906,7 +940,7 @@ fun LibraryScreen(
                                     Column(Modifier.fillMaxSize()) {
                                         if (visible.isEmpty()) {
                                             Text(
-                                                "No games match your search or filter.",
+                                                if (section == "Discover") "No games to download right now." else "No games match your search or filter.",
                                                 color = KryoColors.Muted,
                                                 fontSize = m.t(15),
                                                 modifier = Modifier.padding(start = m.d(8), bottom = m.d(12)),
@@ -942,7 +976,7 @@ fun LibraryScreen(
                                                     onSelect = { openGameChoices(game) },
                                                 )
                                             }
-                                            item(key = "add-slot") {
+                                            if (offersAddSlot) item(key = "add-slot") {
                                                 val index = visible.size
                                                 AddGameSlot(
                                                     m = m,
@@ -969,6 +1003,20 @@ fun LibraryScreen(
                                             }
                                         }
                                     }
+                                }
+                                OverlayVisibility(
+                                    visible = section == "Downloads" && !settingsOpen && !showingInfo,
+                                    modifier = Modifier.fillMaxSize(),
+                                    enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { it / 16 },
+                                    exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { it / 16 },
+                                ) {
+                                    DownloadsPane(
+                                        m = m,
+                                        transfer = liveTransfer,
+                                        finished = finishedDownloads,
+                                        stopHighlighted = slot == ShellSlot.PAGE,
+                                        onStop = onStopDownload,
+                                    )
                                 }
                                 OverlayVisibility(
                                     visible = section == "Friends" && !settingsOpen && !showingInfo,
@@ -1010,8 +1058,13 @@ fun LibraryScreen(
                                                 classic = resolved == DisplayAspect.CLASSIC,
                                                 selection = menuIndex,
                                                 onPlay = {
-                                                    closeChoices()
-                                                    onPlay(game)
+                                                    if (game.installed) {
+                                                        closeChoices()
+                                                        onPlay(game)
+                                                    } else {
+                                                        showingInfo = false
+                                                        onInstall(game)
+                                                    }
                                                 },
                                                 onBack = { closeChoices() },
                                                 onToggleFavorite = { onToggleFavorite(game) },
@@ -1059,10 +1112,7 @@ fun LibraryScreen(
                         closeChoices()
                         sidebarOpen = false
                     },
-                    onDownloads = {
-                        sidebarOpen = false
-                        onSidebarAction("Downloads")
-                    },
+                    onDownloads = { openDownloads() },
                     onSettings = { openSettings() },
                     onExit = onExit,
                 )
@@ -1073,9 +1123,12 @@ fun LibraryScreen(
                 visible = showChoices,
                 game = actionGame,
                 selectedRow = choiceRow,
+                installing = actionGame != null && installingId == actionGame.id,
                 onPlay = { game ->
-                    closeChoices()
-                    onPlay(game)
+                    if (game.installed) {
+                        closeChoices()
+                        onPlay(game)
+                    } else if (installingId != game.id) onInstall(game)
                 },
                 onInfo = { actionGame?.let(::openInfo) },
                 onDelete = { game ->
@@ -1083,6 +1136,11 @@ fun LibraryScreen(
                     onDelete(game)
                 },
                 onDismiss = { closeChoices() },
+            )
+            DownloadTray(
+                transfer = liveTransfer,
+                onStop = onStopDownload,
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
             )
             AddGameMenu(
                 visible = addMenuOpen && section != "Friends",
@@ -1136,9 +1194,9 @@ private fun Sidebar(
     ) {
         data class Item(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
         val targets = listOf(
-            Item("Home", Icons.Outlined.Home, section != "Friends" && !settingsOpen, onHome),
+            Item("Home", Icons.Outlined.Home, section != "Friends" && section != "Downloads" && !settingsOpen, onHome),
             Item("Friends", Icons.Outlined.Group, section == "Friends", onFriends),
-            Item("Downloads", Icons.Outlined.FileDownload, false, onDownloads),
+            Item("Downloads", Icons.Outlined.FileDownload, section == "Downloads", onDownloads),
             Item("Settings", Icons.Outlined.Settings, settingsOpen, onSettings),
         )
         val power = Color(0xFFFF3B30)
@@ -1643,7 +1701,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
                     )
                 }
                 Text(
-                    if (game.installed) "Installed" else if (game.platform == GamePlatform.WEB) "Web game" else "Android",
+                    if (game.installed) "Installed" else game.genre.ifBlank { if (game.platform == GamePlatform.WEB) "Web game" else "Android" },
                     color = if (game.installed) KryoColors.Green else KryoColors.Muted,
                     fontSize = m.t(11),
                     lineHeight = m.t(14, 13),
@@ -1740,6 +1798,7 @@ private fun GameChoiceLayer(
     visible: Boolean,
     game: Game?,
     selectedRow: Int,
+    installing: Boolean,
     onPlay: (Game) -> Unit,
     onInfo: () -> Unit,
     onDelete: (Game) -> Unit,
@@ -1772,7 +1831,7 @@ private fun GameChoiceLayer(
                 when (selectedRow) {
                     0 -> playFocus
                     1 -> infoFocus
-                    else -> deleteFocus
+                    else -> if (shownGame.installed) deleteFocus else infoFocus
                 }.bringIntoFocus()
             }
             val menuWidth = 168.dp
@@ -1783,12 +1842,12 @@ private fun GameChoiceLayer(
                 if (stacked) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) {
                         LiftedGameCard(shownGame, Modifier.width(cardWidth))
-                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, deleteFocus, onPlay, onInfo, onDelete, Modifier.width(menuWidth))
+                        ChoiceMenu(shownGame, selectedRow, installing, playFocus, infoFocus, deleteFocus, onPlay, onInfo, onDelete, Modifier.width(menuWidth))
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) {
                         LiftedGameCard(shownGame, Modifier.width(cardWidth))
-                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, deleteFocus, onPlay, onInfo, onDelete, Modifier.width(menuWidth))
+                        ChoiceMenu(shownGame, selectedRow, installing, playFocus, infoFocus, deleteFocus, onPlay, onInfo, onDelete, Modifier.width(menuWidth))
                     }
                 }
             }
@@ -1825,6 +1884,7 @@ private fun LiftedGameCard(game: Game, modifier: Modifier) {
 private fun ChoiceMenu(
     game: Game,
     selectedRow: Int,
+    installing: Boolean,
     playFocus: FocusRequester,
     infoFocus: FocusRequester,
     deleteFocus: FocusRequester,
@@ -1845,14 +1905,18 @@ private fun ChoiceMenu(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         ChoiceRow(
-            label = "Play",
-            icon = Icons.Outlined.PlayArrow,
+            label = when {
+                installing -> "Installing"
+                game.installed -> "Play"
+                else -> "Install"
+            },
+            icon = if (game.installed) Icons.Outlined.PlayArrow else Icons.Outlined.FileDownload,
             tag = "play_action",
             highlighted = selectedRow == 0,
             focus = playFocus,
             up = FocusRequester.Cancel,
             down = infoFocus,
-            onClick = { onPlay(game) },
+            onClick = { if (!installing) onPlay(game) },
         )
         ChoiceRow(
             label = "Info",
@@ -1861,10 +1925,10 @@ private fun ChoiceMenu(
             highlighted = selectedRow == 1,
             focus = infoFocus,
             up = playFocus,
-            down = deleteFocus,
+            down = if (game.installed) deleteFocus else FocusRequester.Cancel,
             onClick = onInfo,
         )
-        ChoiceRow(
+        if (game.installed) ChoiceRow(
             label = "Delete",
             icon = Icons.Outlined.Delete,
             tag = "delete_action",
@@ -2067,14 +2131,14 @@ private fun GameInfoCopy(
                     .border(if (playFocused || selection == 1) 3.dp else 0.dp, KryoColors.Accent, RoundedCornerShape(8.dp))
                     .clickable(role = Role.Button, onClick = onPlay)
                     .semantics {
-                        contentDescription = "Play ${game.title}"
+                        contentDescription = if (game.installed) "Play ${game.title}" else "Install ${game.title}"
                         if (selection == 1) selected = true
                     }
                     .testTag("info_play")
                     .padding(horizontal = m.d(22)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Play", color = Color(0xFF12141A), fontSize = m.t(15), fontWeight = FontWeight.Bold)
+                Text(if (game.installed) "Play" else "Install", color = Color(0xFF12141A), fontSize = m.t(15), fontWeight = FontWeight.Bold)
             }
             FocusBox(
                 Modifier.size(m.d(44)).testTag("info_favorite"),

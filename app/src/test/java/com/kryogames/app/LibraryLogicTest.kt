@@ -3,6 +3,8 @@ package com.kryogames.app
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 
 class LibraryLogicTest {
@@ -105,6 +107,19 @@ class LibraryLogicTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+    @Test fun transferReadoutShowsSizeSpeedAndWhenItFinished() {
+        assertEquals("1.0 KB", formatTransferSize(1024))
+        assertEquals("1.0 MB", formatTransferSize(1024 * 1024))
+        assertEquals("1.0 KB of 4.0 KB", formatTransferAmount(1024, 4096))
+        assertEquals("2.0 MB/s", formatTransferSpeed(2L * 1024 * 1024))
+        assertEquals(2_000_000L, bytesPerSecond(0, 0, 250_000_000L, 500_000))
+        val whenDownloaded = formatDownloadedAt(
+            Instant.parse("2026-10-07T18:54:00Z").toEpochMilli(),
+            ZoneId.of("America/New_York"),
+            Locale.US,
+        )
+        assertEquals("Oct 7, 2:54 PM", whenDownloaded)
     }
     @Test fun folderWithoutBothFilesIsNotAGame() {
         assertNull(chooseGame(listOf(FolderEntry("index.html"))) { "" })
