@@ -19,7 +19,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // The handheld installer only treats a JAR signature as a certificate.
+            // v2 alone is reported as INSTALL_PARSE_FAILED_NO_CERTIFICATE.
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             optimization {
                 enable = false
