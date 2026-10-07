@@ -123,7 +123,17 @@ private fun <T> motionOut() = tween<T>(MotionOut, easing = MotionEase)
 
 private enum class SearchPhase { Closed, Highlighted, Editing }
 
-private enum class ShellSlot { MENU, DISCOVER, LIBRARY, FAVORITES, SEARCH, BELL, PROFILE, GRID, RAIL }
+private enum class ShellSlot { MENU, DISCOVER, LIBRARY, FAVORITES, SEARCH, BELL, PROFILE, GRID, RAIL, PAGE }
+
+private enum class NavCue { Move, Back, Limit }
+
+private fun NavCue.play() {
+    when (this) {
+        NavCue.Move -> UiCue.move()
+        NavCue.Back -> UiCue.back()
+        NavCue.Limit -> UiCue.limit()
+    }
+}
 
 private val HeaderSlots = listOf(
     ShellSlot.MENU, ShellSlot.DISCOVER, ShellSlot.LIBRARY, ShellSlot.FAVORITES,
@@ -204,6 +214,7 @@ fun LibraryScreen(
     onAppearance: (KryoAppearance) -> Unit = {},
     onToggleFavorite: (Game) -> Unit = {},
     onAddGame: () -> Unit = {},
+    onExit: () -> Unit = {},
 ) {
     var sidebarOpen by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -227,7 +238,7 @@ fun LibraryScreen(
     val slot = runCatching { ShellSlot.valueOf(slotName) }.getOrDefault(ShellSlot.GRID)
     val layoutColumns = remember { intArrayOf(4) }
     val resolvedAspect = remember { mutableStateOf(DisplayAspect.WIDESCREEN) }
-    val railFocus = remember { List(4) { FocusRequester() } }
+    val railFocus = remember { List(5) { FocusRequester() } }
     val sectionFocus = remember { List(HeaderSections.size) { FocusRequester() } }
     val addFocus = remember { FocusRequester() }
     val searchButtonFocus = remember { FocusRequester() }
@@ -248,9 +259,17 @@ fun LibraryScreen(
     val actionGame = games.firstOrNull { it.id == actionGameId }
     val anchors = remember { mutableStateMapOf<String, Rect>() }
     var frameCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var menuSize by remember { mutableStateOf(IntSize(0, 0)) }
-    val shellBlocked = settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || showingInfo || modalOpen
+    val shellBlocked = profileMenuOpen || addMenuOpen || actionGameId != null || showingInfo || modalOpen
+    val soundContext = LocalContext.current.applicationContext
+    DisposableEffect(soundContext) {
+        UiCue.attach()
+        onDispose { }
+    }
     val controllerHost = LocalContext.current.findControllerActivity()
+    DisposableEffect(Unit) {
+        UiCue.attach()
+        onDispose { }
+    }
     SideEffect {
         if (gridIndex > visible.size) gridIndex = visible.size
         if (slot == ShellSlot.GRID) {
@@ -274,6 +293,7 @@ fun LibraryScreen(
     fun openGameChoices(game: Game) {
         profileMenuOpen = false
         addMenuOpen = false
+        if (slotName == ShellSlot.PAGE.name) slotName = ShellSlot.GRID.name
         settingsOpen = false
         actionGameId = game.id
         showingInfo = false
@@ -292,6 +312,10 @@ fun LibraryScreen(
         actionGameId = null
         showingInfo = false
     }
+    fun closeSettings() {
+        settingsOpen = false
+        if (slotName == ShellSlot.PAGE.name) slotName = ShellSlot.GRID.name
+    }
     fun openSettings() {
         profileMenuOpen = false
         addMenuOpen = false
@@ -299,6 +323,7 @@ fun LibraryScreen(
         sidebarOpen = false
         settingsOpen = true
         menuIndex = settingsStartIndex()
+        slotName = ShellSlot.PAGE.name
     }
     fun toggleSidebar() {
         sidebarOpen = !sidebarOpen
@@ -311,6 +336,7 @@ fun LibraryScreen(
         }
     }
     fun applySection(next: String) {
+        if (settingsOpen) closeSettings()
         section = next
         profileMenuOpen = false
         closeChoices()
@@ -325,8 +351,10 @@ fun LibraryScreen(
         keyboard?.hide()
     }
     fun toggleSearch() {
-        if (searchPhase == SearchPhase.Closed) searchPhaseName = SearchPhase.Highlighted.name
-        else closeSearch()
+        if (searchPhase == SearchPhase.Closed) {
+            if (settingsOpen) closeSettings()
+            searchPhaseName = SearchPhase.Highlighted.name
+        } else closeSearch()
     }
     fun activateSearch() {
         if (searchPhase == SearchPhase.Highlighted) searchPhaseName = SearchPhase.Editing.name
@@ -351,77 +379,180 @@ fun LibraryScreen(
     val rootFocusedNow by rememberUpdatedState(rootHasFocus)
     val blockedNow by rememberUpdatedState(shellBlocked)
 
-    fun moveCursor(dx: Int, dy: Int) {
-        if (modalOpen || searchPhase != SearchPhase.Closed) return
+    fun moveSettings(dx: Int, dy: Int): NavCue {
+        if (dx < 0 && menuIndex == 1) {
+            menuIndex = 0
+            return NavCue.Move
+        }
+        if (dx > 0 && menuIndex == 0) {
+            menuIndex = 1
+            return NavCue.Move
+        }
+        if (menuIndex == 2 && dx < 0) {
+            if (appearance == KryoAppearance.DARK) return NavCue.Limit
+            onAppearance(KryoAppearance.DARK)
+            return NavCue.Move
+        }
+        if (menuIndex == 2 && dx > 0) {
+            if (appearance == KryoAppearance.LIGHT) return NavCue.Limit
+            onAppearance(KryoAppearance.LIGHT)
+            return NavCue.Move
+        }
+        if (dy > 0 && menuIndex < 2) {
+            menuIndex = 2
+            return NavCue.Move
+        }
+        if (dy > 0 && menuIndex == 2) {
+            menuIndex = 3
+            return NavCue.Move
+        }
+        if (dy < 0 && menuIndex == 3) {
+            menuIndex = 2
+            return NavCue.Move
+        }
+        if (dy < 0 && menuIndex == 2) {
+            menuIndex = if (resolvedAspect.value == DisplayAspect.CLASSIC) 1 else 0
+            return NavCue.Move
+        }
+        if (dy < 0 && (menuIndex == 0 || menuIndex == 1)) {
+            slotName = sectionSlot().name
+            return NavCue.Move
+        }
+        if (dx < 0 && (menuIndex == 0 || menuIndex == 3)) {
+            slotName = if (sidebarOpen) ShellSlot.RAIL.name else ShellSlot.MENU.name
+            return NavCue.Move
+        }
+        return NavCue.Limit
+    }
+    fun moveCursor(dx: Int, dy: Int): NavCue? {
+        if (modalOpen) return null
+        if (searchPhase != SearchPhase.Closed) return NavCue.Limit
         if (showingInfo) {
-            when {
-                dy > 0 && menuIndex == 0 -> menuIndex = 1
-                dy < 0 && menuIndex == 0 -> closeChoices()
-                dy < 0 && menuIndex > 0 -> menuIndex = 0
-                dx > 0 && menuIndex == 1 -> menuIndex = 2
-                dx < 0 && menuIndex == 2 -> menuIndex = 1
+            return when {
+                dy > 0 && menuIndex == 0 -> {
+                    menuIndex = 1
+                    NavCue.Move
+                }
+                dy < 0 && menuIndex == 0 -> {
+                    closeChoices()
+                    NavCue.Back
+                }
+                dy < 0 && menuIndex > 0 -> {
+                    menuIndex = 0
+                    NavCue.Move
+                }
+                dx > 0 && menuIndex == 1 -> {
+                    menuIndex = 2
+                    NavCue.Move
+                }
+                dx < 0 && menuIndex == 2 -> {
+                    menuIndex = 1
+                    NavCue.Move
+                }
+                else -> NavCue.Limit
             }
-            return
         }
-        if (settingsOpen) {
-            when {
-                dx < 0 && menuIndex == 1 -> menuIndex = 0
-                dx > 0 && menuIndex == 0 -> menuIndex = 1
-                dx < 0 && menuIndex == 2 -> onAppearance(KryoAppearance.DARK)
-                dx > 0 && menuIndex == 2 -> onAppearance(KryoAppearance.LIGHT)
-                dy > 0 && menuIndex < 2 -> menuIndex = 2
-                dy > 0 && menuIndex == 2 -> menuIndex = 3
-                dy < 0 && menuIndex == 3 -> menuIndex = 2
-                dy < 0 && menuIndex == 2 -> menuIndex = if (resolvedAspect.value == DisplayAspect.CLASSIC) 1 else 0
-            }
-            return
-        }
+        if (settingsOpen && slot == ShellSlot.PAGE) return moveSettings(dx, dy)
         if (profileMenuOpen) {
-            if (dy < 0 && menuIndex > 0) menuIndex--
-            else if (dy > 0 && menuIndex < 2) menuIndex++
-            return
+            return when {
+                dy < 0 && menuIndex > 0 -> {
+                    menuIndex--
+                    NavCue.Move
+                }
+                dy > 0 && menuIndex < 1 -> {
+                    menuIndex++
+                    NavCue.Move
+                }
+                else -> NavCue.Limit
+            }
         }
-        if (addMenuOpen) return
+        if (addMenuOpen) return NavCue.Limit
         if (actionGameId != null) {
-            if (dy != 0) choiceRow = (choiceRow + dy).coerceIn(0, 1)
-            return
+            if (dy == 0) return NavCue.Limit
+            val next = (choiceRow + dy).coerceIn(0, 1)
+            return if (next == choiceRow) NavCue.Limit else {
+                choiceRow = next
+                NavCue.Move
+            }
         }
-        when (slot) {
+        return when (slot) {
             ShellSlot.GRID -> {
                 val count = visible.size + 1
                 val current = gridIndex.coerceIn(0, (count - 1).coerceAtLeast(0))
                 val next = gridNeighbor(current, count, layoutColumns[0].coerceAtLeast(1), dx, dy)
                 when {
-                    next != null -> gridIndex = next
-                    dy < 0 -> slotName = sectionSlot().name
-                    dx < 0 && sidebarOpen -> slotName = ShellSlot.RAIL.name
-                    dx < 0 -> slotName = ShellSlot.MENU.name
+                    next != null -> {
+                        gridIndex = next
+                        NavCue.Move
+                    }
+                    dy < 0 -> {
+                        slotName = sectionSlot().name
+                        NavCue.Move
+                    }
+                    dx < 0 && sidebarOpen -> {
+                        slotName = ShellSlot.RAIL.name
+                        NavCue.Move
+                    }
+                    dx < 0 -> {
+                        slotName = ShellSlot.MENU.name
+                        NavCue.Move
+                    }
+                    else -> NavCue.Limit
                 }
             }
             ShellSlot.RAIL -> when {
-                dy < 0 && railIndex > 0 -> railIndex--
-                dy > 0 && railIndex < 3 -> railIndex++
-                dx > 0 -> slotName = ShellSlot.GRID.name
+                dy < 0 && railIndex > 0 -> {
+                    railIndex--
+                    NavCue.Move
+                }
+                dy > 0 && railIndex < 4 -> {
+                    railIndex++
+                    NavCue.Move
+                }
+                dx > 0 -> {
+                    slotName = if (settingsOpen) ShellSlot.PAGE.name else ShellSlot.GRID.name
+                    NavCue.Move
+                }
+                else -> NavCue.Limit
+            }
+            ShellSlot.PAGE -> {
+                slotName = ShellSlot.GRID.name
+                NavCue.Move
             }
             else -> {
                 val index = HeaderSlots.indexOf(slot)
                 if (dx != 0 && index >= 0) {
                     val next = (index + dx).coerceIn(0, HeaderSlots.lastIndex)
-                    if (next != index) slotName = HeaderSlots[next].name
-                    else if (dx < 0 && sidebarOpen && slot == ShellSlot.MENU) slotName = ShellSlot.RAIL.name
-                } else if (dy > 0 && section != "Friends") slotName = ShellSlot.GRID.name
+                    if (next != index) {
+                        slotName = HeaderSlots[next].name
+                        NavCue.Move
+                    } else if (dx < 0 && sidebarOpen && slot == ShellSlot.MENU) {
+                        slotName = ShellSlot.RAIL.name
+                        NavCue.Move
+                    } else {
+                        NavCue.Limit
+                    }
+                } else if (dy > 0 && settingsOpen) {
+                    slotName = ShellSlot.PAGE.name
+                    NavCue.Move
+                } else if (dy > 0 && section != "Friends") {
+                    slotName = ShellSlot.GRID.name
+                    NavCue.Move
+                } else {
+                    NavCue.Limit
+                }
             }
         }
     }
-    fun confirmCursor() {
-        if (modalOpen) return
+    fun confirmCursor(): Boolean {
+        if (modalOpen) return false
         if (searchPhase == SearchPhase.Highlighted) {
             activateSearch()
-            return
+            return true
         }
-        if (searchPhase == SearchPhase.Editing) return
+        if (searchPhase == SearchPhase.Editing) return false
         if (showingInfo) {
-            val game = actionGame ?: return
+            val game = actionGame ?: return false
             when (menuIndex) {
                 0 -> closeChoices()
                 1 -> {
@@ -430,16 +561,16 @@ fun LibraryScreen(
                 }
                 else -> onToggleFavorite(game)
             }
-            return
+            return true
         }
-        if (settingsOpen) {
+        if (settingsOpen && slot == ShellSlot.PAGE) {
             when (menuIndex) {
                 0 -> onAspect(DisplayAspect.WIDESCREEN)
                 1 -> onAspect(DisplayAspect.CLASSIC)
                 2 -> onAppearance(if (appearance == KryoAppearance.DARK) KryoAppearance.LIGHT else KryoAppearance.DARK)
-                else -> settingsOpen = false
+                else -> closeSettings()
             }
-            return
+            return true
         }
         if (profileMenuOpen) {
             when (menuIndex) {
@@ -447,33 +578,32 @@ fun LibraryScreen(
                     profileMenuOpen = false
                     onProfile()
                 }
-                1 -> openSettings()
                 else -> {
                     profileMenuOpen = false
                     onSidebarAction("Log out")
                 }
             }
-            return
+            return true
         }
         if (addMenuOpen) {
             addMenuOpen = false
             onAddGame()
-            return
+            return true
         }
         if (actionGameId != null) {
-            val game = actionGame ?: return
+            val game = actionGame ?: return false
             if (choiceRow == 0) {
                 closeChoices()
                 onPlay(game)
             } else openInfo(game)
-            return
+            return true
         }
         when (slot) {
             ShellSlot.MENU -> toggleSidebar()
             ShellSlot.DISCOVER -> applySection("Discover")
             ShellSlot.LIBRARY -> applySection("Library")
             ShellSlot.FAVORITES -> applySection("Favorites")
-            ShellSlot.SEARCH -> if (searchPhase == SearchPhase.Closed) toggleSearch()
+            ShellSlot.SEARCH -> if (searchPhase == SearchPhase.Closed) toggleSearch() else return false
             ShellSlot.BELL -> onNotifications()
             ShellSlot.PROFILE -> {
                 profileMenuOpen = !profileMenuOpen
@@ -482,11 +612,11 @@ fun LibraryScreen(
             ShellSlot.GRID -> {
                 if (gridIndex >= visible.size) {
                     profileMenuOpen = false
-                    settingsOpen = false
+                    closeSettings()
                     closeChoices()
                     addMenuOpen = true
                     menuIndex = 0
-                } else visible.getOrNull(gridIndex)?.let(::openGameChoices)
+                } else visible.getOrNull(gridIndex)?.let(::openGameChoices) ?: return false
             }
             ShellSlot.RAIL -> when (railIndex) {
                 0 -> {
@@ -498,6 +628,7 @@ fun LibraryScreen(
                     section = "Friends"
                     profileMenuOpen = false
                     closeChoices()
+                    closeSettings()
                     sidebarOpen = false
                     slotName = ShellSlot.LIBRARY.name
                 }
@@ -506,20 +637,20 @@ fun LibraryScreen(
                     slotName = ShellSlot.MENU.name
                     onSidebarAction("Downloads")
                 }
-                else -> {
-                    slotName = ShellSlot.MENU.name
-                    openSettings()
-                }
+                3 -> openSettings()
+                else -> onExit()
             }
+            ShellSlot.PAGE -> return false
         }
+        return true
     }
     val handleAction by rememberUpdatedState<(ControllerAction) -> Unit> { action ->
         when (action) {
-            ControllerAction.LEFT -> moveCursor(-1, 0)
-            ControllerAction.RIGHT -> moveCursor(1, 0)
-            ControllerAction.UP -> moveCursor(0, -1)
-            ControllerAction.DOWN -> moveCursor(0, 1)
-            ControllerAction.CONFIRM -> confirmCursor()
+            ControllerAction.LEFT -> moveCursor(-1, 0)?.play()
+            ControllerAction.RIGHT -> moveCursor(1, 0)?.play()
+            ControllerAction.UP -> moveCursor(0, -1)?.play()
+            ControllerAction.DOWN -> moveCursor(0, 1)?.play()
+            ControllerAction.CONFIRM -> if (confirmCursor()) UiCue.select()
             else -> Unit
         }
         if (showingInfo && action != ControllerAction.LEFT && action != ControllerAction.RIGHT &&
@@ -527,20 +658,34 @@ fun LibraryScreen(
         ) closeChoices()
         if (!modalOpen && action == ControllerAction.SEARCH) {
             toggleSearch()
-        } else if (!modalOpen && actionGameId == null && !settingsOpen && !profileMenuOpen && !addMenuOpen && searchPhase == SearchPhase.Closed) when (action) {
-            ControllerAction.MENU -> toggleSidebar()
+            UiCue.select()
+        } else if (!modalOpen && actionGameId == null && !profileMenuOpen && !addMenuOpen && searchPhase == SearchPhase.Closed) when (action) {
+            ControllerAction.MENU -> {
+                toggleSidebar()
+                UiCue.select()
+            }
             ControllerAction.OPTIONS -> {
                 val game = selectedGame
-                if (game == null) return@rememberUpdatedState
+                if (game == null) {
+                    UiCue.limit()
+                    return@rememberUpdatedState
+                }
                 openGameChoices(game)
+                UiCue.select()
             }
             ControllerAction.PREVIOUS_TAB -> {
                 val index = HeaderSections.indexOf(section)
-                if (index > 0) applySection(HeaderSections[index - 1])
+                if (index > 0) {
+                    applySection(HeaderSections[index - 1])
+                    UiCue.move()
+                } else UiCue.limit()
             }
             ControllerAction.NEXT_TAB -> {
                 val index = HeaderSections.indexOf(section)
-                if (index in 0 until HeaderSections.lastIndex) applySection(HeaderSections[index + 1])
+                if (index in 0 until HeaderSections.lastIndex) {
+                    applySection(HeaderSections[index + 1])
+                    UiCue.move()
+                } else UiCue.limit()
             }
             else -> Unit
         }
@@ -589,17 +734,17 @@ fun LibraryScreen(
     BackHandler(enabled = !modalOpen && (settingsOpen || profileMenuOpen || addMenuOpen || actionGameId != null || section == "Friends" || searchPhase != SearchPhase.Closed || sidebarOpen)) {
         when {
             addMenuOpen -> addMenuOpen = false
-            settingsOpen -> settingsOpen = false
             profileMenuOpen -> profileMenuOpen = false
-            actionGameId != null && showingInfo -> closeChoices()
             actionGameId != null -> closeChoices()
             searchPhase != SearchPhase.Closed -> closeSearch()
-            section == "Friends" -> applySection("Library")
-            else -> {
+            sidebarOpen -> {
                 sidebarOpen = false
                 if (slotName == ShellSlot.RAIL.name) slotName = ShellSlot.MENU.name
             }
+            settingsOpen -> closeSettings()
+            section == "Friends" -> applySection("Library")
         }
+        UiCue.back()
     }
 
     BoxWithConstraints(
@@ -657,11 +802,11 @@ fun LibraryScreen(
             val designW = if (resolved == DisplayAspect.CLASSIC) 960f else 1100f
             val designH = if (resolved == DisplayAspect.CLASSIC) 720f else 688f
             val m = Metrics(min(animatedW.value / designW, animatedH.value / designH).coerceIn(0.8f, 1.35f))
-            val chromeEnabled = !modalOpen && actionGameId == null && !settingsOpen && !profileMenuOpen && !addMenuOpen
+            val chromeEnabled = !modalOpen && actionGameId == null && !profileMenuOpen && !addMenuOpen
             val shellBlur by animateDpAsState(
                 when {
                     sidebarOpen -> 18.dp
-                    actionGameId != null && !showingInfo -> 20.dp
+                    profileMenuOpen || (actionGameId != null && !showingInfo) -> 20.dp
                     else -> 0.dp
                 },
                 motionIn(),
@@ -833,7 +978,7 @@ fun LibraryScreen(
                                             m = m,
                                             aspect = resolved,
                                             appearance = appearance,
-                                            selectedIndex = menuIndex,
+                                            selectedIndex = if (slot == ShellSlot.PAGE) menuIndex else -1,
                                             onAspect = onAspect,
                                             onAppearance = onAppearance,
                                             onDismiss = { settingsOpen = false },
@@ -879,6 +1024,7 @@ fun LibraryScreen(
                                 detectTapGestures {
                                     sidebarOpen = false
                                     if (slotName == ShellSlot.RAIL.name) slotName = ShellSlot.MENU.name
+                                    UiCue.back()
                                 }
                             },
                     )
@@ -892,7 +1038,7 @@ fun LibraryScreen(
                     focus = railFocus,
                     focusRequest = railFocusNonce,
                     railCursor = if (slot == ShellSlot.RAIL) railIndex else -1,
-                    onLibrary = {
+                    onHome = {
                         applySection("Library")
                         sidebarOpen = false
                     },
@@ -907,17 +1053,14 @@ fun LibraryScreen(
                         onSidebarAction("Downloads")
                     },
                     onSettings = { openSettings() },
+                    onExit = onExit,
                 )
             }
 
             val showChoices = actionGame != null && !showingInfo
-            val choiceAnchor = actionGameId?.let { anchors[it] }
             GameChoiceLayer(
                 visible = showChoices,
                 game = actionGame,
-                anchor = choiceAnchor,
-                menuSize = menuSize,
-                onMenuSize = { menuSize = it },
                 selectedRow = choiceRow,
                 onPlay = { game ->
                     closeChoices()
@@ -944,7 +1087,6 @@ fun LibraryScreen(
                     profileMenuOpen = false
                     onProfile()
                 },
-                onSettings = { openSettings() },
                 onLogOut = {
                     profileMenuOpen = false
                     onSidebarAction("Log out")
@@ -965,10 +1107,11 @@ private fun Sidebar(
     focus: List<FocusRequester>,
     focusRequest: Int,
     railCursor: Int,
-    onLibrary: () -> Unit,
+    onHome: () -> Unit,
     onFriends: () -> Unit,
     onDownloads: () -> Unit,
     onSettings: () -> Unit,
+    onExit: () -> Unit,
 ) {
     AnimatedVisibility(
         visible = open,
@@ -978,11 +1121,12 @@ private fun Sidebar(
     ) {
         data class Item(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
         val targets = listOf(
-            Item("Library", Icons.Outlined.SportsEsports, section != "Friends" && !settingsOpen, onLibrary),
+            Item("Home", Icons.Outlined.Home, section != "Friends" && !settingsOpen, onHome),
             Item("Friends", Icons.Outlined.Group, section == "Friends", onFriends),
             Item("Downloads", Icons.Outlined.FileDownload, false, onDownloads),
             Item("Settings", Icons.Outlined.Settings, settingsOpen, onSettings),
         )
+        val power = Color(0xFFFF3B30)
         LaunchedEffect(focusRequest) {
             if (focusRequest == 0) return@LaunchedEffect
             val index = targets.indexOfFirst { it.active }.coerceAtLeast(0)
@@ -1024,6 +1168,36 @@ private fun Sidebar(
                 }
                 Spacer(Modifier.height(m.d(10)))
             }
+            Spacer(Modifier.weight(1f))
+            Text(
+                BuildConfig.VERSION_NAME,
+                color = KryoColors.Muted,
+                fontSize = m.t(12),
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(start = m.d(12), bottom = m.d(8))
+                    .semantics { contentDescription = "App version ${BuildConfig.VERSION_NAME}" },
+            )
+            FocusBox(
+                Modifier.fillMaxWidth().height(m.d(52).coerceAtLeast(44.dp)).focusRequester(focus[4]).focusProperties {
+                    up = focus[3]
+                    down = FocusRequester.Cancel
+                    left = FocusRequester.Cancel
+                    right = FocusRequester.Cancel
+                },
+                description = "Exit",
+                outlined = true,
+                highlighted = railCursor == 4,
+                onClick = onExit,
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = m.d(12)),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(m.d(12)),
+                ) {
+                    Icon(Icons.Outlined.PowerSettingsNew, null, tint = power, modifier = Modifier.size(m.d(22)))
+                    Text("Exit", color = power, fontSize = m.t(16), fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+            }
         }
     }
 }
@@ -1051,7 +1225,8 @@ private fun Header(
     onProfilePlaced: (LayoutCoordinates) -> Unit,
     onToggleSearch: () -> Unit,
 ) {
-    val widget = m.d(48).coerceAtLeast(44.dp)
+    val row = Metrics(m.scale * 1.03f)
+    val widget = row.d(48).coerceAtLeast(44.dp)
     val searchOpen = searchPhase != SearchPhase.Closed
     val barDown = if (searchOpen) searchFocus else downTarget
     val icons = listOf(
@@ -1072,13 +1247,13 @@ private fun Header(
             highlighted = cursor == ShellSlot.MENU,
             onClick = onToggleMenu,
         ) {
-            Icon(Icons.Outlined.Menu, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(22)))
+            Icon(Icons.Outlined.Menu, null, tint = KryoColors.Text, modifier = Modifier.size(row.d(22)))
         }
     }
     val tabGroup: @Composable () -> Unit = {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(m.d(8))) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(row.d(8))) {
             menuButton()
-            KeyBadge("LB", m)
+            KeyBadge("LB", row)
             icons.forEachIndexed { index, (label, icon, tag) ->
                 HeaderIcon(
                     label = label,
@@ -1089,7 +1264,7 @@ private fun Header(
                         "Library" -> ShellSlot.LIBRARY
                         else -> ShellSlot.FAVORITES
                     },
-                    m = m,
+                    m = row,
                     modifier = Modifier.focusRequester(sectionFocus[index]).focusProperties {
                         left = if (index == 0) menuFocus else sectionFocus[index - 1]
                         right = if (index == icons.lastIndex) searchButtonFocus else sectionFocus[index + 1]
@@ -1098,7 +1273,7 @@ private fun Header(
                     onClick = { onSection(label) },
                 )
             }
-            KeyBadge("RB", m)
+            KeyBadge("RB", row)
         }
     }
     val bell: @Composable () -> Unit = {
@@ -1113,7 +1288,7 @@ private fun Header(
             highlighted = cursor == ShellSlot.BELL,
             onClick = onNotifications,
         ) {
-            Icon(Icons.Outlined.Notifications, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(22)))
+            Icon(Icons.Outlined.Notifications, null, tint = KryoColors.Text, modifier = Modifier.size(row.d(22)))
         }
     }
     val profile: @Composable (Modifier) -> Unit = { mod ->
@@ -1128,19 +1303,19 @@ private fun Header(
             onClick = onProfile,
         ) {
             Row(
-                Modifier.fillMaxSize().padding(horizontal = m.d(6)),
+                Modifier.fillMaxSize().padding(horizontal = row.d(6)),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(m.d(6)),
+                horizontalArrangement = Arrangement.spacedBy(row.d(6)),
             ) {
                 Image(
                     painterResource(R.drawable.profile_avatar),
                     null,
-                    Modifier.size(m.d(36)).clip(RoundedCornerShape(m.d(5))),
+                    Modifier.size(row.d(36)).clip(RoundedCornerShape(row.d(5))),
                     contentScale = ContentScale.Crop,
                 )
                 Text(
                     username,
-                    fontSize = m.t(14),
+                    fontSize = row.t(14),
                     fontWeight = FontWeight.SemiBold,
                     color = KryoColors.Text,
                     textAlign = TextAlign.Center,
@@ -1148,7 +1323,7 @@ private fun Header(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Icon(Icons.Outlined.KeyboardArrowDown, null, tint = KryoColors.Muted, modifier = Modifier.size(m.d(17)))
+                Icon(Icons.Outlined.KeyboardArrowDown, null, tint = KryoColors.Muted, modifier = Modifier.size(row.d(17)))
             }
         }
     }
@@ -1165,14 +1340,14 @@ private fun Header(
             highlighted = cursor == ShellSlot.SEARCH && searchPhase == SearchPhase.Closed,
             onClick = onToggleSearch,
         ) {
-            Icon(Icons.Outlined.Search, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(22)))
+            Icon(Icons.Outlined.Search, null, tint = KryoColors.Text, modifier = Modifier.size(row.d(22)))
         }
     }
     val tools: @Composable () -> Unit = {
         Row(
-            Modifier.padding(end = m.d(8)),
+            Modifier.padding(end = row.d(8)),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(m.d(8)),
+            horizontalArrangement = Arrangement.spacedBy(row.d(8)),
         ) {
             searchButton()
             bell()
@@ -1183,16 +1358,16 @@ private fun Header(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 tabGroup()
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(m.d(8))) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(row.d(8))) {
                 tools()
                 Spacer(Modifier.weight(1f))
-                profile(Modifier.widthIn(min = m.d(96), max = m.d(140)))
+                profile(Modifier.widthIn(min = row.d(96), max = row.d(140)))
             }
         } else {
             OpenRailHeader(
-                minGap = m.d(16),
-                preferredProfile = m.d(150),
-                minimumProfile = m.d(96),
+                minGap = row.d(16),
+                preferredProfile = row.d(150),
+                minimumProfile = row.d(96),
                 tabs = { tabGroup() },
                 tools = { tools() },
                 profile = { profile(Modifier.fillMaxWidth()) },
@@ -1359,6 +1534,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
     var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    LaunchedEffect(hovered) { if (hovered) UiCue.move() }
     val bringIntoView = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
     val shape = RoundedCornerShape(m.d(7))
@@ -1393,6 +1569,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
                 val activate = event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
                 if (!activate) false
                 else if (event.type == KeyEventType.KeyUp && enabled) {
+                    UiCue.select()
                     onSelect()
                     true
                 } else true
@@ -1409,7 +1586,12 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
             .clip(shape)
             .background(Brush.verticalGradient(listOf(KryoColors.CardTop, KryoColors.CardBottom)))
             .border(if (focused || pinned || highlighted) 3.dp else 1.dp, borderColor, shape)
-            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = { if (enabled) onSelect() })
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = {
+                if (enabled) {
+                    UiCue.select()
+                    onSelect()
+                }
+            })
             .semantics {
                 contentDescription = "${game.title}, ${if (game.installed) "Installed" else if (game.platform == GamePlatform.WEB) "Web game" else "Android game"}${if (game.favorite) ", Favorite" else ""}"
                 if (highlighted) selected = true
@@ -1470,6 +1652,9 @@ internal fun FocusBox(
     content: @Composable BoxScope.() -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    LaunchedEffect(hovered) { if (hovered) UiCue.move() }
     val shape = RoundedCornerShape(7.dp)
     val enabled = LocalUiEnabled.current
     val frosted = LocalFrosted.current
@@ -1502,13 +1687,19 @@ internal fun FocusBox(
             val activate = event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
             if (!activate) false
             else if (event.type == KeyEventType.KeyUp && enabled) {
+                UiCue.select()
                 onClick()
                 true
             } else true
-        }.onFocusChanged { focused = it.isFocused }.clip(shape)
+        }.hoverable(interaction).onFocusChanged { focused = it.isFocused }.clip(shape)
             .background(fill)
             .border(if (!boxed) 0.dp else if (ring || marked) 2.dp else 1.dp, border, shape)
-            .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = {
+                if (enabled) {
+                    UiCue.select()
+                    onClick()
+                }
+            })
             .semantics {
                 contentDescription = description
                 if (highlighted) selected = true
@@ -1533,9 +1724,6 @@ private fun KeyBadge(label: String, m: Metrics) {
 private fun GameChoiceLayer(
     visible: Boolean,
     game: Game?,
-    anchor: Rect?,
-    menuSize: IntSize,
-    onMenuSize: (IntSize) -> Unit,
     selectedRow: Int,
     onPlay: (Game) -> Unit,
     onInfo: () -> Unit,
@@ -1544,33 +1732,20 @@ private fun GameChoiceLayer(
     var shown by remember { mutableStateOf(game) }
     if (game != null) shown = game
     val current = shown
-    val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val menuWidth = 184.dp
-        val estimatedHeight = if (menuSize.height > 0) with(density) { menuSize.height.toDp() } else 156.dp
-        val place = with(density) {
-            val widthPx = menuWidth.toPx()
-            val heightPx = estimatedHeight.toPx()
-            if (anchor == null) {
-                PopupPlace((maxWidth.toPx() - widthPx) / 2f, (maxHeight.toPx() - heightPx) / 2f, false)
-            } else {
-                placeGameMenu(
-                    anchor.left, anchor.top, anchor.right, anchor.bottom,
-                    maxWidth.toPx(), maxHeight.toPx(), widthPx, heightPx,
-                    gap = 14f,
-                )
-            }
-        }
-        val origin = if (place.placeOnLeft) TransformOrigin(1f, 0.5f) else TransformOrigin(0f, 0.5f)
-        AnimatedVisibility(visible = visible, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(180)), exit = fadeOut(tween(140))) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)).pointerInput(Unit) { detectTapGestures { onDismiss() } })
+        AnimatedVisibility(visible = visible, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(120)), exit = fadeOut(tween(100))) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)).pointerInput(Unit) {
+                detectTapGestures {
+                    onDismiss()
+                    UiCue.back()
+                }
+            })
         }
         AnimatedVisibility(
             visible = visible && current != null,
-            modifier = Modifier.offset { IntOffset(place.x.roundToInt(), place.y.roundToInt()) },
-            enter = fadeIn(tween(200)) + scaleIn(initialScale = 0.72f, animationSpec = tween(260, easing = MotionEase), transformOrigin = origin) +
-                slideInHorizontally(tween(260, easing = MotionEase)) { if (place.placeOnLeft) it / 3 else -it / 3 },
-            exit = fadeOut(motionOut()) + scaleOut(targetScale = 0.9f, animationSpec = motionOut(), transformOrigin = origin),
+            modifier = Modifier.fillMaxSize(),
+            enter = fadeIn(tween(130)) + scaleIn(initialScale = 0.9f, animationSpec = tween(150, easing = MotionEase)),
+            exit = fadeOut(tween(110)) + scaleOut(targetScale = 0.96f, animationSpec = tween(110)),
         ) {
             val playFocus = remember { FocusRequester() }
             val infoFocus = remember { FocusRequester() }
@@ -1578,48 +1753,126 @@ private fun GameChoiceLayer(
             LaunchedEffect(visible, shownGame.id) {
                 if (visible) playFocus.bringIntoFocus()
             }
-            Column(
-                Modifier.width(menuWidth)
-                    .onSizeChanged(onMenuSize)
-                    .shadow(28.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f), spotColor = Color.Black.copy(alpha = 0.45f))
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(KryoColors.Surface)
-                    .border(1.dp, KryoColors.Border, RoundedCornerShape(16.dp))
-                    .pointerInput(Unit) { detectTapGestures { } }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-            ) {
-                Text(shownGame.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(10.dp))
-                FocusBox(
-                    Modifier.fillMaxWidth().height(44.dp).focusRequester(playFocus).focusProperties {
-                        down = infoFocus
-                        up = FocusRequester.Cancel
-                        left = FocusRequester.Cancel
-                        right = FocusRequester.Cancel
-                    }.testTag("play_action"),
-                    "Play",
-                    outlined = true,
-                    highlighted = selectedRow == 0,
-                    onClick = { onPlay(shownGame) },
-                ) {
-                    Text("Play", color = KryoColors.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(Modifier.height(8.dp))
-                FocusBox(
-                    Modifier.fillMaxWidth().height(44.dp).focusRequester(infoFocus).focusProperties {
-                        up = playFocus
-                        down = FocusRequester.Cancel
-                        left = FocusRequester.Cancel
-                        right = FocusRequester.Cancel
-                    }.testTag("info_action"),
-                    "Info",
-                    outlined = true,
-                    highlighted = selectedRow == 1,
-                    onClick = onInfo,
-                ) {
-                    Text("Info", color = KryoColors.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            val menuWidth = 168.dp
+            val gap = 22.dp
+            val cardWidth = (maxWidth * 0.3f).coerceIn(156.dp, 214.dp)
+            val stacked = maxWidth < cardWidth + menuWidth + gap + 36.dp
+            Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+                if (stacked) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) {
+                        LiftedGameCard(shownGame, Modifier.width(cardWidth))
+                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, onPlay, onInfo, Modifier.width(menuWidth))
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) {
+                        LiftedGameCard(shownGame, Modifier.width(cardWidth))
+                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, onPlay, onInfo, Modifier.width(menuWidth))
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun LiftedGameCard(game: Game, modifier: Modifier) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier
+            .aspectRatio(0.94f)
+            .shadow(26.dp, shape, ambientColor = Color.Black.copy(alpha = 0.45f), spotColor = Color.Black.copy(alpha = 0.38f))
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(KryoColors.CardTop, KryoColors.CardBottom)))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), shape),
+    ) {
+        GameArtwork(game, Modifier.fillMaxWidth().weight(1f))
+        Column(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.SpaceBetween) {
+            Text(game.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                if (game.installed) "Installed" else if (game.platform == GamePlatform.WEB) "Web game" else "Android",
+                color = KryoColors.Muted,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChoiceMenu(
+    game: Game,
+    selectedRow: Int,
+    playFocus: FocusRequester,
+    infoFocus: FocusRequester,
+    onPlay: (Game) -> Unit,
+    onInfo: () -> Unit,
+    modifier: Modifier,
+) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier
+            .shadow(22.dp, shape, ambientColor = Color.Black.copy(alpha = 0.4f), spotColor = Color.Black.copy(alpha = 0.28f))
+            .clip(shape)
+            .background(KryoColors.Surface)
+            .border(1.dp, KryoColors.Border, shape)
+            .pointerInput(Unit) { detectTapGestures { } }
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ChoiceRow(
+            label = "Play",
+            icon = Icons.Outlined.PlayArrow,
+            tag = "play_action",
+            highlighted = selectedRow == 0,
+            focus = playFocus,
+            up = FocusRequester.Cancel,
+            down = infoFocus,
+            onClick = { onPlay(game) },
+        )
+        ChoiceRow(
+            label = "Info",
+            icon = Icons.Outlined.Info,
+            tag = "info_action",
+            highlighted = selectedRow == 1,
+            focus = infoFocus,
+            up = playFocus,
+            down = FocusRequester.Cancel,
+            onClick = onInfo,
+        )
+    }
+}
+
+@Composable
+private fun ChoiceRow(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tag: String,
+    highlighted: Boolean,
+    focus: FocusRequester,
+    up: FocusRequester,
+    down: FocusRequester,
+    onClick: () -> Unit,
+) {
+    val tint = if (highlighted) KryoColors.Accent else KryoColors.Text
+    FocusBox(
+        Modifier.fillMaxWidth().height(48.dp).focusRequester(focus).focusProperties {
+            this.up = up
+            this.down = down
+            left = FocusRequester.Cancel
+            right = FocusRequester.Cancel
+        }.testTag(tag),
+        label,
+        outlined = true,
+        highlighted = highlighted,
+        onClick = onClick,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
+            Text(label, color = KryoColors.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -1840,7 +2093,12 @@ private fun AddGameMenu(
 ) {
     val density = LocalDensity.current
     AnimatedVisibility(visible = visible && anchor != null, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(140)), exit = fadeOut(tween(120))) {
-        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { onDismiss() } })
+        Box(Modifier.fillMaxSize().pointerInput(Unit) {
+            detectTapGestures {
+                onDismiss()
+                UiCue.back()
+            }
+        })
     }
     val menuWidth = 168.dp
     val x = if (anchor == null) 0f else with(density) { (anchor.right - menuWidth.toPx()).coerceAtLeast(8.dp.toPx()) }
@@ -1883,15 +2141,21 @@ private fun ProfileMenuLayer(
     anchor: Rect?,
     selectedRow: Int,
     onViewProfile: () -> Unit,
-    onSettings: () -> Unit,
     onLogOut: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val density = LocalDensity.current
     AnimatedVisibility(visible = visible && anchor != null, modifier = Modifier.fillMaxSize(), enter = fadeIn(tween(140)), exit = fadeOut(tween(120))) {
-        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { onDismiss() } })
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).pointerInput(Unit) {
+                detectTapGestures {
+                    onDismiss()
+                    UiCue.back()
+                }
+            },
+        )
     }
-    val menuWidth = 196.dp
+    val menuWidth = 152.dp
     val x = if (anchor == null) 0f else with(density) { (anchor.right - menuWidth.toPx()).coerceAtLeast(8.dp.toPx()) }
     val y = if (anchor == null) 0f else with(density) { anchor.bottom + 8.dp.toPx() }
     AnimatedVisibility(
@@ -1900,11 +2164,10 @@ private fun ProfileMenuLayer(
         enter = fadeIn(motionIn()) + expandVertically(motionIn(), expandFrom = Alignment.Top) + slideInVertically(motionIn()) { -it / 4 },
         exit = fadeOut(motionOut()) + shrinkVertically(motionOut(), shrinkTowards = Alignment.Top) + slideOutVertically(motionOut()) { -it / 5 },
     ) {
-        val first = remember { FocusRequester() }
-        val second = remember { FocusRequester() }
-        val third = remember { FocusRequester() }
+        val viewProfile = remember { FocusRequester() }
+        val logOut = remember { FocusRequester() }
         LaunchedEffect(Unit) {
-            first.bringIntoFocus()
+            viewProfile.bringIntoFocus()
         }
         Column(
             Modifier.width(menuWidth)
@@ -1918,9 +2181,8 @@ private fun ProfileMenuLayer(
         ) {
             data class RowItem(val label: String, val focus: FocusRequester, val up: FocusRequester, val down: FocusRequester, val action: () -> Unit)
             listOf(
-                RowItem("View profile", first, first, second, onViewProfile),
-                RowItem("Settings", second, first, third, onSettings),
-                RowItem("Log out", third, second, third, onLogOut),
+                RowItem("View profile", viewProfile, viewProfile, logOut, onViewProfile),
+                RowItem("Log out", logOut, viewProfile, logOut, onLogOut),
             ).forEachIndexed { index, item ->
                 FocusBox(
                     Modifier.fillMaxWidth().height(40.dp).focusRequester(item.focus).focusProperties {
@@ -2021,30 +2283,6 @@ private fun SettingsPage(
                 AppearanceSwitch(light = light, m = m)
             }
         }
-        SettingsLabel("About", m)
-        Row(
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(m.d(12)))
-                .background(KryoColors.Surface)
-                .border(1.dp, KryoColors.Border, RoundedCornerShape(m.d(12)))
-                .padding(horizontal = m.d(16), vertical = m.d(14))
-                .testTag("app_details"),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f).padding(end = m.d(12))) {
-                Text("KryoGames", color = KryoColors.Text, fontSize = m.t(16), fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(m.d(2)))
-                Text("APP DETAILS", color = KryoColors.Muted, fontSize = m.t(12), fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp)
-            }
-            Text(
-                BuildConfig.VERSION_NAME,
-                color = KryoColors.Text,
-                fontSize = m.t(16),
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.semantics { contentDescription = "App version ${BuildConfig.VERSION_NAME}" },
-            )
-        }
         FocusBox(
             Modifier.fillMaxWidth().height(m.d(48).coerceAtLeast(44.dp)).focusRequester(close).focusProperties {
                 up = theme
@@ -2134,6 +2372,7 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, highlighted: Boolean, on
                 val activate = event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
                 if (!activate) false
                 else if (event.type == KeyEventType.KeyUp && enabled) {
+                    UiCue.select()
                     onClick()
                     true
                 } else true
@@ -2144,7 +2383,12 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, highlighted: Boolean, on
             }
             .clip(shape)
             .background(KryoColors.CardBottom)
-            .clickable(role = Role.Button, onClick = { if (enabled) onClick() })
+            .clickable(role = Role.Button, onClick = {
+                if (enabled) {
+                    UiCue.select()
+                    onClick()
+                }
+            })
             .semantics {
                 contentDescription = "Add a game"
                 if (highlighted) selected = true

@@ -173,6 +173,7 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
                 KryoThemeState.appearance = chosen
                 saveAppearance(context, chosen)
             },
+            onExit = { activity?.finishAndRemoveTask() },
             onSidebarAction = { name ->
                 overlay = when (name) {
                     "Downloads" -> Overlay.Message(

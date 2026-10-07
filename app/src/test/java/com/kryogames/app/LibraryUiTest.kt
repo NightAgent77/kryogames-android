@@ -145,10 +145,21 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Profile: Kidxpr").performClick()
         compose.onNodeWithContentDescription("View profile").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
-        compose.onNodeWithContentDescription("Settings").assertIsSelected()
-        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithContentDescription("Log out").assertIsSelected()
+        compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_B)
+        compose.onNodeWithTag("menu_button").performClick()
+        compose.onNodeWithContentDescription("Home").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithTag("aspect_16_9").assertIsSelected()
         compose.onNodeWithTag("game_grid").assertDoesNotExist()
+        controllerButton(KeyEvent.KEYCODE_DPAD_UP)
+        compose.onNodeWithTag("section_library").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_START)
+        compose.onNodeWithContentDescription("Exit").assertIsDisplayed()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_START)
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("aspect_16_9").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
         compose.onNodeWithTag("aspect_4_3").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
@@ -181,14 +192,13 @@ class LibraryUiTest {
         compose.onNodeWithTag("info_play").assertDoesNotExist()
     }
 
-    @Test fun settingsShowsThisBuildVersion() {
+    @Test fun menuShowsThisBuildVersionAndExit() {
+        compose.onNodeWithContentDescription("App version 0.0.6").assertDoesNotExist()
         compose.onNodeWithTag("menu_button").performClick()
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.onNodeWithTag("app_details").assertIsDisplayed()
-        compose.onNodeWithText("APP DETAILS").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.5").assertIsDisplayed()
-        compose.onNodeWithText("Back").performClick()
-        compose.onNodeWithTag("app_details").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Home").assertIsDisplayed()
+        compose.onNodeWithContentDescription("App version 0.0.6").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Exit").performClick()
+        assertTrue(compose.activity.isFinishing)
     }
 
     private fun assertOpenRailSearchGap(atLeast: androidx.compose.ui.unit.Dp) {
