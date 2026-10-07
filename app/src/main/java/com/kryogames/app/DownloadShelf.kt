@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Stop
@@ -37,8 +36,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.testTag
@@ -64,9 +61,8 @@ internal fun DownloadTray(
         shown?.let { current ->
             Column(
                 Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
                     .background(KryoColors.Surface)
-                    .border(1.dp, KryoColors.Border, RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                    .border(1.dp, KryoColors.Border)
                     .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 14.dp)
                     .testTag("download_tray"),
             ) {
@@ -182,7 +178,7 @@ private fun TransferBlades(fraction: Float, settling: Boolean, modifier: Modifie
     )
     val ink = if (settling) KryoColors.Green else KryoColors.Accent
     val dim = KryoColors.Border
-    Canvas(modifier.clip(RoundedCornerShape(3.dp)).testTag("transfer_blades")) {
+    Canvas(modifier.testTag("transfer_blades")) {
         val count = 46
         val gap = 2.dp.toPx()
         val bladeW = ((size.width - gap * (count - 1)) / count).coerceAtLeast(1f)
@@ -203,11 +199,10 @@ private fun TransferBlades(fraction: Float, settling: Boolean, modifier: Modifie
             }
             val height = size.height * if (leading && !settling) 1f else 0.72f
             val top = (size.height - height) / 2f
-            drawRoundRect(
+            drawRect(
                 color = if (on <= 0f) dim else ink.copy(alpha = 0.22f + 0.78f * on),
                 topLeft = Offset(index * (bladeW + gap), top),
                 size = Size(bladeW, height),
-                cornerRadius = CornerRadius(bladeW / 2f, bladeW / 2f),
             )
         }
     }

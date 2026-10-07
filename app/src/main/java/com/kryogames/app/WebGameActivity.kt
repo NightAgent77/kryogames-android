@@ -3,6 +3,8 @@ package com.kryogames.app
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.WebResourceRequest
@@ -18,6 +20,7 @@ import java.io.File
 /** Local HTML/JS games run on an HTTPS asset origin; no file:// permissions. */
 class WebGameActivity : ControllerActivity() {
     override val useLibraryShortcuts = false
+    private val gamepad = WebGamepadBridge()
     private lateinit var webView: WebView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,6 +76,9 @@ class WebGameActivity : ControllerActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
+            isFocusable = true
+            isFocusableInTouchMode = true
+            addJavascriptInterface(gamepad, "KryoPad")
             setBackgroundColor(0xFF101417.toInt())
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -102,6 +108,13 @@ class WebGameActivity : ControllerActivity() {
                 }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                     request.url.scheme != "https" || request.url.host != "appassets.androidplatform.net"
+                override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                    view.evaluateJavascript(WEB_GAMEPAD_BOOT, null)
+                }
+                override fun onPageFinished(view: WebView, url: String) {
+                    view.evaluateJavascript(WEB_GAMEPAD_BOOT, null)
+                    view.requestFocus()
+                }
             }
         }
         setContentView(webView)
@@ -109,10 +122,28 @@ class WebGameActivity : ControllerActivity() {
         webView.requestFocus()
     }
 
-    override fun onPause() { if (::webView.isInitialized) webView.onPause(); super.onPause() }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        gamepad.onKey(event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        gamepad.onMotion(event)
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun onPause() {
+        gamepad.clear()
+        if (::webView.isInitialized) webView.onPause()
+        super.onPause()
+    }
     override fun onResume() { super.onResume(); if (::webView.isInitialized) webView.onResume() }
     override fun onDestroy() {
-        if (::webView.isInitialized) { webView.stopLoading(); webView.destroy() }
+        if (::webView.isInitialized) {
+            webView.removeJavascriptInterface("KryoPad")
+            webView.stopLoading()
+            webView.destroy()
+        }
         super.onDestroy()
     }
     companion object {

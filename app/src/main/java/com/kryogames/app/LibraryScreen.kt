@@ -312,6 +312,11 @@ fun LibraryScreen(
         actionGameId = game.id
         showingInfo = false
         lastFocusedGameId = game.id
+        val index = visible.indexOfFirst { it.id == game.id }
+        if (index >= 0) {
+            gridIndex = index
+            focusOnAdd = false
+        }
         choiceRow = 0
         menuIndex = 0
     }
@@ -731,6 +736,12 @@ fun LibraryScreen(
         }
     }
     LaunchedEffect(controllerActions) { controllerActions.collect { handleAction(it) } }
+    LaunchedEffect(gridIndex, slotName, shellBlocked, ids) {
+        if (shellBlocked || slot != ShellSlot.GRID) return@LaunchedEffect
+        val game = visible.getOrNull(gridIndex)
+        if (game != null) cardFocus[game.id]?.bringIntoFocus()
+        else if (offersAddSlot) addFocus.bringIntoFocus()
+    }
     LaunchedEffect(searchPhase) {
         when (searchPhase) {
             SearchPhase.Highlighted -> keyboard?.hide()
@@ -1604,7 +1615,6 @@ private fun HeaderIcon(
 
 @Composable
 private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean, highlighted: Boolean, onFocused: () -> Unit, onSelect: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     LaunchedEffect(hovered) { if (hovered) UiCue.move() }
@@ -1612,11 +1622,11 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
     val scope = rememberCoroutineScope()
     val shape = RoundedCornerShape(m.d(7))
     val enabled = LocalUiEnabled.current
+    val accent = pinned || highlighted
     val scale by animateFloatAsState(
         when {
-            focused || highlighted -> 1.035f
+            accent -> 1.035f
             hovered -> 1.02f
-            pinned -> 1.02f
             else -> 1f
         },
         tween(180, easing = MotionEase),
@@ -1624,7 +1634,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
     )
     val borderColor by androidx.compose.animation.animateColorAsState(
         when {
-            focused || pinned || highlighted -> KryoColors.Accent
+            accent -> KryoColors.Accent
             hovered -> Color(0xFF8FA0B3)
             else -> KryoColors.CardEdge
         },
@@ -1650,7 +1660,6 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
             .bringIntoViewRequester(bringIntoView)
             .hoverable(interaction)
             .onFocusChanged {
-                focused = it.isFocused
                 if (it.isFocused) {
                     onFocused()
                     scope.launch { bringIntoView.bringIntoView() }
@@ -1658,7 +1667,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
             }
             .clip(shape)
             .background(Brush.verticalGradient(listOf(KryoColors.CardTop, KryoColors.CardBottom)))
-            .border(if (focused || pinned || highlighted) 3.dp else 1.dp, borderColor, shape)
+            .border(if (accent) 3.dp else 1.dp, borderColor, shape)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = {
                 if (enabled) {
                     UiCue.select()
@@ -1670,7 +1679,7 @@ private fun GameCard(game: Game, m: Metrics, modifier: Modifier, pinned: Boolean
                 if (highlighted) selected = true
             }
             .testTag("game_${game.id}")
-            .padding(if (focused || pinned || highlighted) 3.dp else 1.dp),
+            .padding(if (accent) 3.dp else 1.dp),
     ) {
         GameArtwork(game, Modifier.fillMaxWidth().weight(1f))
         Column(Modifier.fillMaxWidth().height(m.d(50)).padding(horizontal = m.d(11), vertical = m.d(6)), verticalArrangement = Arrangement.SpaceBetween) {
@@ -2460,8 +2469,7 @@ private fun AspectChoice(label: String, selected: Boolean, highlighted: Boolean,
 
 @Composable
 private fun AddGameSlot(m: Metrics, modifier: Modifier, highlighted: Boolean, onFocused: () -> Unit, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    val ring = focused || highlighted
+    val ring = highlighted
     val enabled = LocalUiEnabled.current
     val shape = RoundedCornerShape(m.d(7))
     Box(
@@ -2477,7 +2485,6 @@ private fun AddGameSlot(m: Metrics, modifier: Modifier, highlighted: Boolean, on
                 } else true
             }
             .onFocusChanged {
-                focused = it.isFocused
                 if (it.isFocused) onFocused()
             }
             .clip(shape)

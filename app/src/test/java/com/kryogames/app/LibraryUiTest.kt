@@ -249,10 +249,10 @@ class LibraryUiTest {
     }
 
     @Test fun menuShowsThisBuildVersionAndExit() {
-        compose.onNodeWithContentDescription("App version 0.0.6").assertDoesNotExist()
+        compose.onNodeWithContentDescription("App version 0.0.8").assertDoesNotExist()
         compose.onNodeWithTag("menu_button").performClick()
         compose.onNodeWithContentDescription("Home").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.6").assertIsDisplayed()
+        compose.onNodeWithContentDescription("App version 0.0.8").assertIsDisplayed()
         compose.onNodeWithContentDescription("Exit").performClick()
         assertTrue(compose.activity.isFinishing)
     }
