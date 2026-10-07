@@ -1,6 +1,7 @@
 package com.kryogames.app
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -201,6 +202,14 @@ internal fun loadStoredImports(context: Context): List<StoredImport> {
             }
         }
     }.getOrDefault(emptyList())
+}
+
+internal fun releaseStoredImport(context: Context, stored: StoredImport) {
+    val uri = Uri.parse(stored.treeUri)
+    if (uri.scheme != "content") return
+    runCatching {
+        context.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
 }
 
 internal fun saveStoredImports(context: Context, games: List<StoredImport>) {

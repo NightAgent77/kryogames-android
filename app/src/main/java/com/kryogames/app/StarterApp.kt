@@ -68,11 +68,13 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
     val scope = rememberCoroutineScope()
     val online = rememberDeviceOnline()
     var favoriteIds by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var removedIds by rememberSaveable { mutableStateOf(loadRemovedGameIds(context).toList()) }
     var aspectName by rememberSaveable { mutableStateOf(loadAspect(context)?.name) }
     var appearanceName by rememberSaveable { mutableStateOf(loadAppearance(context).name) }
     var imported by remember { mutableStateOf(loadStoredImports(context)) }
-    val games = remember(favoriteIds, imported) {
-        (DemoGames.all + imported.map { it.asGame() }).map { it.copy(favorite = it.id in favoriteIds) }
+    val games = remember(favoriteIds, imported, removedIds) {
+        (DemoGames.all.filter { it.id !in removedIds } + imported.map { it.asGame() })
+            .map { it.copy(favorite = it.id in favoriteIds) }
     }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
     var awaitingControls by remember { mutableStateOf(false) }
@@ -147,6 +149,20 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
         val error = launchGame(context, game)
         if (error != null) overlay = Overlay.Message("Launch setup", error)
     }
+    fun removeFromLibrary(game: Game) {
+        favoriteIds = favoriteIds - game.id
+        val stored = imported.firstOrNull { it.id == game.id }
+        if (stored != null) {
+            val next = imported.filterNot { it.id == game.id }
+            imported = next
+            saveStoredImports(context, next)
+            releaseStoredImport(context, stored)
+            return
+        }
+        val nextRemoved = (removedIds + game.id).distinct()
+        removedIds = nextRemoved
+        saveRemovedGameIds(context, nextRemoved.toSet())
+    }
     BackHandler(enabled = overlay != null) { overlay = null }
     Box(Modifier.fillMaxSize()) {
         LibraryScreen(games = games, controllerActions = controllerActions, modalOpen = overlay != null,
@@ -159,6 +175,7 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             onToggleFavorite = { game ->
                 favoriteIds = if (game.favorite) favoriteIds - game.id else favoriteIds + game.id
             },
+            onDelete = ::removeFromLibrary,
             onAddGame = {
                 if (fileControlsEnabled(context) || skipFilePrompt(context)) openFileApp()
                 else overlay = Overlay.FilePrompt
@@ -326,6 +343,20 @@ internal fun loadAppearance(context: Context): KryoAppearance =
 
 internal fun saveAppearance(context: Context, appearance: KryoAppearance) {
     context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE).edit().putString(AppearanceKey, appearance.name).apply()
+}
+
+private const val RemovedGamesKey = "removed_games"
+
+internal fun loadRemovedGameIds(context: Context): Set<String> =
+    context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE)
+        .getStringSet(RemovedGamesKey, emptySet())
+        .orEmpty()
+
+internal fun saveRemovedGameIds(context: Context, ids: Set<String>) {
+    context.getSharedPreferences(SettingsPrefs, Context.MODE_PRIVATE)
+        .edit()
+        .putStringSet(RemovedGamesKey, HashSet(ids))
+        .commit()
 }
 
 private const val SkipFilePromptKey = "skip_file_prompt"

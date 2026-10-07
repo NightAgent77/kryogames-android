@@ -1,9 +1,11 @@
 package com.kryogames.app
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.SystemClock
 import android.view.KeyEvent
+import org.junit.After
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -23,6 +25,11 @@ import java.io.File
 @OptIn(ExperimentalTestApi::class)
 class LibraryUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    @After fun clearRemovedGames() {
+        compose.activity.getSharedPreferences("kryo_settings", Context.MODE_PRIVATE)
+            .edit().remove("removed_games").commit()
+    }
 
     private fun controllerButton(code: Int) {
         compose.runOnUiThread {
@@ -49,6 +56,10 @@ class LibraryUiTest {
         compose.onNodeWithTag("play_action").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
         compose.onNodeWithTag("info_action").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("delete_action").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("delete_action").assertIsSelected()
     }
 
     @Test fun renderAndActivateActuallyFocusedGame() {
@@ -98,6 +109,18 @@ class LibraryUiTest {
         compose.onNodeWithContentDescription("Settings").assertExists()
         compose.onNodeWithTag("menu_button").performClick()
         compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
+    }
+
+    @Test fun deleteRemovesTheGameFromTheLibrary() {
+        compose.onNodeWithTag("game_maze-ops").performClick()
+        compose.onNodeWithTag("delete_action").assertIsDisplayed()
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("delete_action").assertIsSelected()
+        controllerButton(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithTag("game_maze-ops").assertDoesNotExist()
+        compose.onNodeWithTag("delete_action").assertDoesNotExist()
+        compose.onNodeWithTag("add_game").assertIsDisplayed()
     }
 
     @Test fun controllerOptionsFavoritesAndBackRestoreFocus() {

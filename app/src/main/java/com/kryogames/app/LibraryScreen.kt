@@ -125,6 +125,9 @@ private enum class SearchPhase { Closed, Highlighted, Editing }
 
 private enum class ShellSlot { MENU, DISCOVER, LIBRARY, FAVORITES, SEARCH, BELL, PROFILE, GRID, RAIL, PAGE }
 
+/** Play, Info, Delete. */
+private const val ChoiceLast = 2
+
 private enum class NavCue { Move, Back, Limit }
 
 private fun NavCue.play() {
@@ -213,6 +216,7 @@ fun LibraryScreen(
     appearance: KryoAppearance = KryoAppearance.DARK,
     onAppearance: (KryoAppearance) -> Unit = {},
     onToggleFavorite: (Game) -> Unit = {},
+    onDelete: (Game) -> Unit = {},
     onAddGame: () -> Unit = {},
     onExit: () -> Unit = {},
 ) {
@@ -469,7 +473,7 @@ fun LibraryScreen(
         if (addMenuOpen) return NavCue.Limit
         if (actionGameId != null) {
             if (dy == 0) return NavCue.Limit
-            val next = (choiceRow + dy).coerceIn(0, 1)
+            val next = (choiceRow + dy).coerceIn(0, ChoiceLast)
             return if (next == choiceRow) NavCue.Limit else {
                 choiceRow = next
                 NavCue.Move
@@ -592,10 +596,17 @@ fun LibraryScreen(
         }
         if (actionGameId != null) {
             val game = actionGame ?: return false
-            if (choiceRow == 0) {
-                closeChoices()
-                onPlay(game)
-            } else openInfo(game)
+            when (choiceRow) {
+                0 -> {
+                    closeChoices()
+                    onPlay(game)
+                }
+                1 -> openInfo(game)
+                else -> {
+                    closeChoices()
+                    onDelete(game)
+                }
+            }
             return true
         }
         when (slot) {
@@ -1067,6 +1078,10 @@ fun LibraryScreen(
                     onPlay(game)
                 },
                 onInfo = { actionGame?.let(::openInfo) },
+                onDelete = { game ->
+                    closeChoices()
+                    onDelete(game)
+                },
                 onDismiss = { closeChoices() },
             )
             AddGameMenu(
@@ -1727,6 +1742,7 @@ private fun GameChoiceLayer(
     selectedRow: Int,
     onPlay: (Game) -> Unit,
     onInfo: () -> Unit,
+    onDelete: (Game) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var shown by remember { mutableStateOf(game) }
@@ -1749,9 +1765,15 @@ private fun GameChoiceLayer(
         ) {
             val playFocus = remember { FocusRequester() }
             val infoFocus = remember { FocusRequester() }
+            val deleteFocus = remember { FocusRequester() }
             val shownGame = current ?: return@AnimatedVisibility
-            LaunchedEffect(visible, shownGame.id) {
-                if (visible) playFocus.bringIntoFocus()
+            LaunchedEffect(visible, shownGame.id, selectedRow) {
+                if (!visible) return@LaunchedEffect
+                when (selectedRow) {
+                    0 -> playFocus
+                    1 -> infoFocus
+                    else -> deleteFocus
+                }.bringIntoFocus()
             }
             val menuWidth = 168.dp
             val gap = 22.dp
@@ -1761,12 +1783,12 @@ private fun GameChoiceLayer(
                 if (stacked) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) {
                         LiftedGameCard(shownGame, Modifier.width(cardWidth))
-                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, onPlay, onInfo, Modifier.width(menuWidth))
+                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, deleteFocus, onPlay, onInfo, onDelete, Modifier.width(menuWidth))
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) {
                         LiftedGameCard(shownGame, Modifier.width(cardWidth))
-                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, onPlay, onInfo, Modifier.width(menuWidth))
+                        ChoiceMenu(shownGame, selectedRow, playFocus, infoFocus, deleteFocus, onPlay, onInfo, onDelete, Modifier.width(menuWidth))
                     }
                 }
             }
@@ -1786,15 +1808,16 @@ private fun LiftedGameCard(game: Game, modifier: Modifier) {
             .border(1.dp, Color.White.copy(alpha = 0.08f), shape),
     ) {
         GameArtwork(game, Modifier.fillMaxWidth().weight(1f))
-        Column(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.SpaceBetween) {
-            Text(game.title, color = KryoColors.Text, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                if (game.installed) "Installed" else if (game.platform == GamePlatform.WEB) "Web game" else "Android",
-                color = KryoColors.Muted,
-                fontSize = 12.sp,
-                maxLines = 1,
-            )
-        }
+        Text(
+            game.title,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            color = KryoColors.Text,
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            lineHeight = 22.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1804,8 +1827,10 @@ private fun ChoiceMenu(
     selectedRow: Int,
     playFocus: FocusRequester,
     infoFocus: FocusRequester,
+    deleteFocus: FocusRequester,
     onPlay: (Game) -> Unit,
     onInfo: () -> Unit,
+    onDelete: (Game) -> Unit,
     modifier: Modifier,
 ) {
     val shape = RoundedCornerShape(18.dp)
@@ -1836,8 +1861,18 @@ private fun ChoiceMenu(
             highlighted = selectedRow == 1,
             focus = infoFocus,
             up = playFocus,
-            down = FocusRequester.Cancel,
+            down = deleteFocus,
             onClick = onInfo,
+        )
+        ChoiceRow(
+            label = "Delete",
+            icon = Icons.Outlined.Delete,
+            tag = "delete_action",
+            highlighted = selectedRow == 2,
+            focus = deleteFocus,
+            up = infoFocus,
+            down = FocusRequester.Cancel,
+            onClick = { onDelete(game) },
         )
     }
 }

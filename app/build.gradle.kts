@@ -13,7 +13,7 @@ android {
         applicationId = "com.kryogames.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 8
+        versionCode = 9
         versionName = "0.0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

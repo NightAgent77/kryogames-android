@@ -69,26 +69,32 @@ private class UiSounds {
 }
 
 private class CueTrack(pcm: ShortArray) {
-    private val track: AudioTrack? = open(pcm)
+    private val pcmBytes = cuePcm(pcm)
+    private val track: AudioTrack? = open(lowLatency = true) ?: open(lowLatency = false)
 
     fun play(volume: Float) {
         val track = track ?: return
         runCatching {
+            // A static buffer stays parked at the end after it finishes, and
+            // setPlaybackHeadPosition does not rewind it. Stop, then reload.
+            if (track.playState != AudioTrack.PLAYSTATE_STOPPED) {
+                track.pause()
+                track.stop()
+            }
+            if (track.reloadStaticData() != AudioTrack.SUCCESS) {
+                track.setPlaybackHeadPosition(0)
+            }
             track.setVolume(volume.coerceIn(0f, 1f))
-            if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.pause()
-            track.setPlaybackHeadPosition(0)
             track.play()
         }
     }
 
-    private fun open(pcm: ShortArray): AudioTrack? = runCatching {
-        val data = ByteBuffer.allocate(pcm.size * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
-            pcm.forEach { putShort(it) }
-        }.array()
-        AudioTrack.Builder()
+    private fun open(lowLatency: Boolean): AudioTrack? = runCatching {
+        val data = pcmBytes
+        val builder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_GAME)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build(),
             )
@@ -101,12 +107,30 @@ private class CueTrack(pcm: ShortArray) {
             )
             .setTransferMode(AudioTrack.MODE_STATIC)
             .setBufferSizeInBytes(data.size)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            .build()
-            .also { created ->
-                if (created.write(data, 0, data.size) < 0) error("short cue rejected")
-            }
+        if (lowLatency) builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        builder.build().also { created ->
+            if (created.write(data, 0, data.size) < data.size) error("short cue rejected")
+        }
     }.getOrNull()
+}
+
+/** Pads past the mixer period so a short click is actually delivered, not dropped. */
+private fun cuePcm(pcm: ShortArray): ByteArray {
+    val pcmBytes = pcm.size * 2
+    val hardware = AudioTrack.getMinBufferSize(
+        SAMPLE_RATE,
+        AudioFormat.CHANNEL_OUT_MONO,
+        AudioFormat.ENCODING_PCM_16BIT,
+    )
+    val hardwareBytes = if (hardware > 0) hardware else pcmBytes
+    val holdBytes = SAMPLE_RATE * 2 * 120 / 1000
+    var size = maxOf(pcmBytes, hardwareBytes, holdBytes)
+    if (size % 2 != 0) size++
+    val data = ByteArray(size)
+    ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).apply {
+        pcm.forEach { putShort(it) }
+    }
+    return data
 }
 
 private const val SAMPLE_RATE = 44100
