@@ -39,7 +39,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -239,7 +238,6 @@ fun LibraryScreen(
     var profileMenuOpen by rememberSaveable { mutableStateOf(false) }
     var addMenuOpen by rememberSaveable { mutableStateOf(false) }
     var searchPhaseName by rememberSaveable { mutableStateOf(SearchPhase.Closed.name) }
-    var railFocusNonce by remember { mutableIntStateOf(0) }
     var rootHasFocus by remember { mutableStateOf(false) }
     var slotName by rememberSaveable { mutableStateOf(ShellSlot.GRID.name) }
     var gridIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -324,7 +322,7 @@ fun LibraryScreen(
         lastFocusedGameId = game.id
         actionGameId = game.id
         showingInfo = true
-        menuIndex = 1
+        menuIndex = 0
     }
     fun settingsStartIndex() = if (resolvedAspect.value == DisplayAspect.CLASSIC) 1 else 0
     fun closeChoices() {
@@ -347,8 +345,12 @@ fun LibraryScreen(
     fun toggleSidebar() {
         sidebarOpen = !sidebarOpen
         if (sidebarOpen) {
-            railFocusNonce++
-            railIndex = if (section == "Friends") 1 else 0
+            railIndex = when {
+                settingsOpen -> 3
+                section == "Friends" -> 1
+                section == "Downloads" -> 2
+                else -> 0
+            }
             slotName = ShellSlot.RAIL.name
         } else if (slotName == ShellSlot.RAIL.name) {
             slotName = ShellSlot.MENU.name
@@ -459,25 +461,17 @@ fun LibraryScreen(
         if (searchPhase != SearchPhase.Closed) return NavCue.Limit
         if (showingInfo) {
             return when {
-                dy > 0 && menuIndex == 0 -> {
+                dx > 0 && menuIndex == 0 -> {
                     menuIndex = 1
                     NavCue.Move
                 }
-                dy < 0 && menuIndex == 0 -> {
-                    closeChoices()
-                    NavCue.Back
-                }
-                dy < 0 && menuIndex > 0 -> {
+                dx < 0 && menuIndex == 1 -> {
                     menuIndex = 0
                     NavCue.Move
                 }
-                dx > 0 && menuIndex == 1 -> {
-                    menuIndex = 2
-                    NavCue.Move
-                }
-                dx < 0 && menuIndex == 2 -> {
-                    menuIndex = 1
-                    NavCue.Move
+                dy < 0 -> {
+                    closeChoices()
+                    NavCue.Back
                 }
                 else -> NavCue.Limit
             }
@@ -588,8 +582,7 @@ fun LibraryScreen(
         if (showingInfo) {
             val game = actionGame ?: return false
             when (menuIndex) {
-                0 -> closeChoices()
-                1 -> if (game.installed) {
+                0 -> if (game.installed) {
                     closeChoices()
                     onPlay(game)
                 } else if (installingId != game.id) {
@@ -939,7 +932,7 @@ fun LibraryScreen(
                                 }
                                 Spacer(Modifier.height(m.d(12)))
                             } else {
-                                Spacer(Modifier.height(m.d(8)))
+                                Spacer(Modifier.height(m.d(6)))
                             }
                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                 OverlayVisibility(
@@ -1077,7 +1070,6 @@ fun LibraryScreen(
                                                         onInstall(game)
                                                     }
                                                 },
-                                                onBack = { closeChoices() },
                                                 onToggleFavorite = { onToggleFavorite(game) },
                                             )
                                         }
@@ -1111,7 +1103,6 @@ fun LibraryScreen(
                     section = section,
                     settingsOpen = settingsOpen,
                     focus = railFocus,
-                    focusRequest = railFocusNonce,
                     railCursor = if (slot == ShellSlot.RAIL) railIndex else -1,
                     onHome = {
                         applySection("Library")
@@ -1189,7 +1180,6 @@ private fun Sidebar(
     section: String,
     settingsOpen: Boolean,
     focus: List<FocusRequester>,
-    focusRequest: Int,
     railCursor: Int,
     onHome: () -> Unit,
     onFriends: () -> Unit,
@@ -1211,10 +1201,9 @@ private fun Sidebar(
             Item("Settings", Icons.Outlined.Settings, settingsOpen, onSettings),
         )
         val power = Color(0xFFFF3B30)
-        LaunchedEffect(focusRequest) {
-            if (focusRequest == 0) return@LaunchedEffect
-            val index = targets.indexOfFirst { it.active }.coerceAtLeast(0)
-            focus.getOrNull(index)?.bringIntoFocus()
+        LaunchedEffect(railCursor) {
+            if (railCursor !in focus.indices) return@LaunchedEffect
+            focus[railCursor].bringIntoFocus()
         }
         Column(
             Modifier.width(width).fillMaxHeight()
@@ -1236,8 +1225,7 @@ private fun Sidebar(
                         right = FocusRequester.Cancel
                     },
                     description = item.label,
-                    filled = item.active,
-                    marked = item.active,
+                    trackFocus = false,
                     highlighted = index == railCursor,
                     onClick = item.action,
                 ) {
@@ -1270,6 +1258,7 @@ private fun Sidebar(
                 },
                 description = "Exit",
                 outlined = true,
+                trackFocus = false,
                 highlighted = railCursor == 4,
                 onClick = onExit,
             ) {
@@ -1320,6 +1309,19 @@ private fun Header(
     )
     val bellFocus = remember { FocusRequester() }
     val profileFocus = remember { FocusRequester() }
+    LaunchedEffect(cursor, searchPhase) {
+        val target = when (cursor) {
+            ShellSlot.MENU -> menuFocus
+            ShellSlot.DISCOVER -> sectionFocus[0]
+            ShellSlot.LIBRARY -> sectionFocus[1]
+            ShellSlot.FAVORITES -> sectionFocus[2]
+            ShellSlot.SEARCH -> if (searchPhase == SearchPhase.Closed) searchButtonFocus else return@LaunchedEffect
+            ShellSlot.BELL -> bellFocus
+            ShellSlot.PROFILE -> profileFocus
+            else -> return@LaunchedEffect
+        }
+        target.bringIntoFocus()
+    }
     val menuButton: @Composable () -> Unit = {
         FocusBox(
             Modifier.size(widget).focusRequester(menuFocus).focusProperties {
@@ -1328,16 +1330,20 @@ private fun Header(
             }.testTag("menu_button"),
             description = "Menu",
             outlined = true,
+            trackFocus = false,
             highlighted = cursor == ShellSlot.MENU,
             onClick = onToggleMenu,
         ) {
             Icon(Icons.Outlined.Menu, null, tint = KryoColors.Text, modifier = Modifier.size(row.d(22)))
         }
     }
-    val tabGroup: @Composable () -> Unit = {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(row.d(8))) {
-            menuButton()
-            KeyBadge("LB", row)
+    val sectionSwitcher: @Composable () -> Unit = {
+        Row(
+            Modifier.testTag("section_switcher"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(row.d(14)),
+        ) {
+            HeaderDivider(row)
             icons.forEachIndexed { index, (label, icon, tag) ->
                 HeaderIcon(
                     label = label,
@@ -1357,7 +1363,7 @@ private fun Header(
                     onClick = { onSection(label) },
                 )
             }
-            KeyBadge("RB", row)
+            HeaderDivider(row)
         }
     }
     val bell: @Composable () -> Unit = {
@@ -1369,6 +1375,7 @@ private fun Header(
             },
             "Notifications",
             outlined = true,
+            trackFocus = false,
             highlighted = cursor == ShellSlot.BELL,
             onClick = onNotifications,
         ) {
@@ -1383,6 +1390,7 @@ private fun Header(
             },
             "Profile: $username",
             outlined = true,
+            trackFocus = false,
             highlighted = cursor == ShellSlot.PROFILE,
             onClick = onProfile,
         ) {
@@ -1421,6 +1429,7 @@ private fun Header(
             "Search",
             outlined = searchPhase == SearchPhase.Closed,
             marked = searchPhase != SearchPhase.Closed,
+            trackFocus = false,
             highlighted = cursor == ShellSlot.SEARCH && searchPhase == SearchPhase.Closed,
             onClick = onToggleSearch,
         ) {
@@ -1439,8 +1448,9 @@ private fun Header(
     }
     Column(verticalArrangement = Arrangement.spacedBy(m.d(10))) {
         if (narrow) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                tabGroup()
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                menuButton()
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { sectionSwitcher() }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(row.d(8))) {
                 tools()
@@ -1452,7 +1462,8 @@ private fun Header(
                 minGap = row.d(16),
                 preferredProfile = row.d(150),
                 minimumProfile = row.d(96),
-                tabs = { tabGroup() },
+                menu = { menuButton() },
+                sections = { sectionSwitcher() },
                 tools = { tools() },
                 profile = { profile(Modifier.fillMaxWidth()) },
             )
@@ -1477,37 +1488,61 @@ private fun OpenRailHeader(
     minGap: Dp,
     preferredProfile: Dp,
     minimumProfile: Dp,
-    tabs: @Composable () -> Unit,
+    menu: @Composable () -> Unit,
+    sections: @Composable () -> Unit,
     tools: @Composable () -> Unit,
     profile: @Composable () -> Unit,
 ) {
     Layout(
         modifier = Modifier.fillMaxWidth(),
         content = {
-            tabs()
+            menu()
+            sections()
             tools()
             profile()
         },
     ) { measurables, constraints ->
         val loose = Constraints(0, Constraints.Infinity, 0, constraints.maxHeight)
-        val lead = measurables[0].measure(loose)
-        val toolsPlaceable = measurables[1].measure(loose)
-        val room = constraints.maxWidth - lead.width - minGap.roundToPx() - toolsPlaceable.width
-        val profileWidth = room.coerceIn(minimumProfile.roundToPx(), preferredProfile.roundToPx())
-        val profilePlaceable = measurables[2].measure(
+        val menuPlaceable = measurables[0].measure(loose)
+        val sectionsPlaceable = measurables[1].measure(loose)
+        val toolsPlaceable = measurables[2].measure(loose)
+        val gap = minGap.roundToPx()
+        val room = constraints.maxWidth - menuPlaceable.width - gap - toolsPlaceable.width
+        val preferred = preferredProfile.roundToPx()
+        val minimum = minimumProfile.roundToPx()
+        val profileWidth = when {
+            room >= preferred -> preferred
+            room >= minimum -> room
+            else -> room.coerceAtLeast(0)
+        }
+        val profilePlaceable = measurables[3].measure(
             Constraints(profileWidth, profileWidth, 0, constraints.maxHeight),
         )
         val width = constraints.maxWidth
-        val height = maxOf(lead.height, toolsPlaceable.height, profilePlaceable.height)
+        val height = maxOf(menuPlaceable.height, sectionsPlaceable.height, toolsPlaceable.height, profilePlaceable.height)
         layout(width, height) {
             val trailWidth = toolsPlaceable.width + profilePlaceable.width
-            val gapped = lead.width + minGap.roundToPx()
-            val trailX = if (gapped + trailWidth <= width) width - trailWidth else gapped
-            lead.placeRelative(0, (height - lead.height) / 2)
+            val trailX = (width - trailWidth).coerceAtLeast(menuPlaceable.width + gap)
+            val spanStart = menuPlaceable.width
+            val spanEnd = trailX
+            val sectionsX = (spanStart + (spanEnd - spanStart - sectionsPlaceable.width) / 2)
+                .coerceIn(spanStart, (spanEnd - sectionsPlaceable.width).coerceAtLeast(spanStart))
+            menuPlaceable.placeRelative(0, (height - menuPlaceable.height) / 2)
+            sectionsPlaceable.placeRelative(sectionsX, (height - sectionsPlaceable.height) / 2)
             toolsPlaceable.placeRelative(trailX, (height - toolsPlaceable.height) / 2)
             profilePlaceable.placeRelative(trailX + toolsPlaceable.width, (height - profilePlaceable.height) / 2)
         }
     }
+}
+
+@Composable
+private fun HeaderDivider(m: Metrics) {
+    Box(
+        Modifier
+            .width(1.dp)
+            .height(m.d(18))
+            .background(KryoColors.Muted.copy(alpha = 0.4f)),
+    )
 }
 
 @Composable
@@ -1570,9 +1605,8 @@ private fun HeaderIcon(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
-    val emphasized = active || highlighted
     val tint by androidx.compose.animation.animateColorAsState(
-        if (emphasized) KryoColors.Accent else KryoColors.Muted,
+        if (active) KryoColors.Accent else KryoColors.Muted,
         tween(MotionIn, easing = MotionEase),
         label = "headerIcon",
     )
@@ -1581,8 +1615,7 @@ private fun HeaderIcon(
         tween(MotionIn, easing = MotionEase),
         label = "headerLine",
     )
-    val iconScale by animateFloatAsState(if (highlighted) 1.16f else 1f, tween(MotionIn, easing = MotionEase), label = "headerIconScale")
-    val shown = if (emphasized) {
+    val shown = if (active) {
         when (label) {
             "Discover" -> Icons.Filled.Explore
             "Library" -> Icons.Filled.VideoLibrary
@@ -1595,19 +1628,11 @@ private fun HeaderIcon(
         FocusBox(
             Modifier.size(m.d(44).coerceAtLeast(40.dp)).then(modifier),
             label,
-            boxed = false,
+            trackFocus = false,
             highlighted = highlighted,
             onClick = onClick,
         ) {
-            Icon(
-                shown,
-                null,
-                tint = tint,
-                modifier = Modifier.size(m.d(22)).graphicsLayer {
-                    scaleX = iconScale
-                    scaleY = iconScale
-                },
-            )
+            Icon(shown, null, tint = tint, modifier = Modifier.size(m.d(22)))
         }
         Box(Modifier.width(m.d(22)).height(2.dp).background(underline))
     }
@@ -1729,6 +1754,7 @@ internal fun FocusBox(
     filled: Boolean = false,
     marked: Boolean = false,
     boxed: Boolean = true,
+    trackFocus: Boolean = true,
     highlighted: Boolean = false,
     onClick: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
@@ -1740,7 +1766,7 @@ internal fun FocusBox(
     val shape = RoundedCornerShape(7.dp)
     val enabled = LocalUiEnabled.current
     val frosted = LocalFrosted.current
-    val armed = focused || highlighted
+    val armed = highlighted || (trackFocus && focused)
     val ring = boxed && armed
     val showFill = boxed && (filled || outlined || armed || marked)
     val border by androidx.compose.animation.animateColorAsState(
@@ -1788,17 +1814,6 @@ internal fun FocusBox(
             },
         contentAlignment = Alignment.Center,
         content = content,
-    )
-}
-
-@Composable
-private fun KeyBadge(label: String, m: Metrics) {
-    Text(
-        label,
-        Modifier.border(1.dp, KryoColors.Border, RoundedCornerShape(4.dp)).padding(horizontal = m.d(8), vertical = m.d(3)),
-        color = KryoColors.Muted,
-        fontSize = m.t(10, 10),
-        lineHeight = m.t(12, 12),
     )
 }
 
@@ -1992,72 +2007,34 @@ private fun GameInfoView(
     classic: Boolean,
     selection: Int,
     onPlay: () -> Unit,
-    onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
 ) {
-    val playFocus = remember { FocusRequester() }
-    val gap = if (classic) m.d(12) else m.d(20)
+    val gap = if (classic) m.d(16) else m.d(22)
     Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) {
-        Column(Modifier.fillMaxSize().padding(horizontal = m.d(8), vertical = m.d(6))) {
-            FocusBox(Modifier.size(m.d(40)).testTag("info_back"), "Back", outlined = true, highlighted = selection == 0, onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = KryoColors.Text, modifier = Modifier.size(m.d(18)))
-            }
-            Spacer(Modifier.height(m.d(8)))
-            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                if (classic) {
-                    val ratio = 735f / 575f
-                    val sideBySide = maxWidth >= 440.dp
-                    if (sideBySide) {
-                        val roomForArt = (maxWidth - gap - 200.dp).coerceAtLeast(120.dp)
-                        val maxArtW = min(maxWidth.value * 0.36f, roomForArt.value)
-                        val maxArtH = maxHeight.value * 0.88f
-                        val artW = min(maxArtW, maxArtH * ratio).dp
-                        val artH = (artW.value / ratio).dp
-                        Row(
-                            Modifier.fillMaxSize().clipToBounds(),
-                            horizontalArrangement = Arrangement.spacedBy(gap),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            GameInfoArt(game, Modifier.size(artW, artH))
-                            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.CenterStart) {
-                                GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
-                            }
-                        }
-                    } else {
-                        val maxArtH = maxHeight.value * 0.36f
-                        val artW = min(maxWidth.value * 0.72f, maxArtH * ratio).dp
-                        val artH = (artW.value / ratio).dp
-                        Column(
-                            Modifier.fillMaxSize().clipToBounds(),
-                            verticalArrangement = Arrangement.spacedBy(gap),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            GameInfoArt(game, Modifier.size(artW, artH))
-                            GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
-                        }
-                    }
-                } else {
-                    val stack = maxWidth < 520.dp
-                    if (stack) {
-                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
-                            GameInfoArt(game, Modifier.fillMaxWidth().weight(1f))
-                            GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
-                        }
-                    } else {
-                        Row(
-                            Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.spacedBy(gap),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            GameInfoArt(
-                                game,
-                                Modifier.fillMaxHeight().aspectRatio(735f / 575f, matchHeightConstraintsFirst = true),
-                            )
-                            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
-                                GameInfoCopy(game, m, classic, selection, playFocus, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
-                            }
-                        }
-                    }
+        BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = m.d(8))) {
+            val ratio = 0.94f
+            val sideBySide = maxWidth >= 480.dp
+            val maxArtW = min(maxWidth.value * 0.42f, (maxWidth - gap - m.d(220)).coerceAtLeast(m.d(150)).value)
+            val maxArtH = if (sideBySide) maxHeight.value else maxHeight.value * 0.52f
+            val artW = min(maxArtW, maxArtH * ratio).dp
+            val artH = (artW.value / ratio).dp
+            if (sideBySide) {
+                Row(
+                    Modifier.fillMaxSize().clipToBounds(),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    GameInfoArt(game, Modifier.size(artW, artH))
+                    GameInfoDetails(game, m, classic, selection, onPlay, onToggleFavorite, Modifier.weight(1f))
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxSize().clipToBounds(),
+                    verticalArrangement = Arrangement.spacedBy(gap),
+                    horizontalAlignment = Alignment.Start,
+                ) {
+                    GameInfoArt(game, Modifier.size(artW, artH))
+                    GameInfoDetails(game, m, classic, selection, onPlay, onToggleFavorite, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -2077,14 +2054,52 @@ private fun GameInfoArt(game: Game, modifier: Modifier) {
 }
 
 @Composable
-private fun GameInfoCopy(
+private fun GameInfoDetails(
     game: Game,
     m: Metrics,
     classic: Boolean,
     selection: Int,
-    playFocus: FocusRequester,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(m.d(12))) {
+        GameInfoCopy(game, m, classic, Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(m.d(12)), verticalAlignment = Alignment.CenterVertically) {
+            FocusBox(
+                Modifier.size(m.d(48)).testTag("info_play"),
+                if (game.installed) "Play ${game.title}" else "Install ${game.title}",
+                outlined = true,
+                trackFocus = false,
+                highlighted = selection == 0,
+                onClick = onPlay,
+            ) {
+                Icon(
+                    if (game.installed) Icons.Outlined.PlayArrow else Icons.Outlined.FileDownload,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(m.d(22)),
+                )
+            }
+            FocusBox(
+                Modifier.size(m.d(48)).testTag("info_favorite"),
+                if (game.favorite) "Remove from favorites" else "Add to favorites",
+                outlined = true,
+                trackFocus = false,
+                highlighted = selection == 1,
+                onClick = onToggleFavorite,
+            ) {
+                Icon(Icons.Outlined.Star, null, tint = if (game.favorite) Color(0xFFFF3B3B) else Color.White, modifier = Modifier.size(m.d(22)))
+            }
+        }
+    }
+}
+
+@Composable
+private fun GameInfoCopy(
+    game: Game,
+    m: Metrics,
+    classic: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val genre = game.genre.ifBlank { if (game.platform == GamePlatform.WEB) "Web" else "Android" }
@@ -2128,35 +2143,6 @@ private fun GameInfoCopy(
                     color = Color.White,
                     fontSize = m.t(12),
                 )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(m.d(10)), verticalAlignment = Alignment.CenterVertically) {
-            var playFocused by remember { mutableStateOf(false) }
-            Box(
-                Modifier.height(m.d(44)).widthIn(min = m.d(120)).focusRequester(playFocus)
-                    .onFocusChanged { playFocused = it.isFocused }
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White)
-                    .border(if (playFocused || selection == 1) 3.dp else 0.dp, KryoColors.Accent, RoundedCornerShape(8.dp))
-                    .clickable(role = Role.Button, onClick = onPlay)
-                    .semantics {
-                        contentDescription = if (game.installed) "Play ${game.title}" else "Install ${game.title}"
-                        if (selection == 1) selected = true
-                    }
-                    .testTag("info_play")
-                    .padding(horizontal = m.d(22)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(if (game.installed) "Play" else "Install", color = Color(0xFF12141A), fontSize = m.t(15), fontWeight = FontWeight.Bold)
-            }
-            FocusBox(
-                Modifier.size(m.d(44)).testTag("info_favorite"),
-                if (game.favorite) "Remove from favorites" else "Add to favorites",
-                outlined = true,
-                highlighted = selection == 2,
-                onClick = onToggleFavorite,
-            ) {
-                Icon(Icons.Outlined.Star, null, tint = if (game.favorite) Color(0xFFFF3B3B) else Color.White, modifier = Modifier.size(m.d(20)))
             }
         }
     }

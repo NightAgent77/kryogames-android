@@ -238,34 +238,36 @@ class LibraryUiTest {
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
         controllerButton(KeyEvent.KEYCODE_BUTTON_A)
         compose.onNodeWithTag("info_play").assertIsSelected()
+        compose.onNodeWithTag("info_back").assertDoesNotExist()
         controllerButton(KeyEvent.KEYCODE_DPAD_RIGHT)
         compose.onNodeWithTag("info_favorite").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_BUTTON_A)
-        controllerButton(KeyEvent.KEYCODE_DPAD_UP)
-        compose.onNodeWithTag("info_back").assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_UP)
         compose.onNodeWithTag("game_maze-ops").assertIsSelected()
         compose.onNodeWithTag("info_play").assertDoesNotExist()
     }
 
     @Test fun menuShowsThisBuildVersionAndExit() {
-        compose.onNodeWithContentDescription("App version 0.0.8").assertDoesNotExist()
+        compose.onNodeWithContentDescription("App version 0.0.9").assertDoesNotExist()
         compose.onNodeWithTag("menu_button").performClick()
         compose.onNodeWithContentDescription("Home").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.8").assertIsDisplayed()
+        compose.onNodeWithContentDescription("App version 0.0.9").assertIsDisplayed()
         compose.onNodeWithContentDescription("Exit").performClick()
         assertTrue(compose.activity.isFinishing)
     }
 
     private fun assertOpenRailSearchGap(atLeast: androidx.compose.ui.unit.Dp) {
-        val rb = compose.onNodeWithText("RB", substring = false).fetchSemanticsNode().boundsInRoot
+        val menu = compose.onNodeWithTag("menu_button").fetchSemanticsNode().boundsInRoot
+        val switcher = compose.onNodeWithTag("section_switcher").fetchSemanticsNode().boundsInRoot
         val search = compose.onNodeWithTag("search_button").fetchSemanticsNode().boundsInRoot
         val bell = compose.onNodeWithContentDescription("Notifications").fetchSemanticsNode().boundsInRoot
         val profile = compose.onNodeWithContentDescription("Profile: Kidxpr").fetchSemanticsNode().boundsInRoot
         val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
-        val gap = search.left - rb.right
+        val gap = search.left - switcher.right
+        val leftGap = switcher.left - menu.right
         val minimum = with(compose.density) { atLeast.toPx() }
-        assertTrue("RB and search gap was $gap", gap >= minimum - 1f)
+        assertTrue("section and search gap was $gap", gap >= minimum - 1f)
+        assertEquals(leftGap, gap, 2f)
         assertEquals(bell.left - search.right, profile.left - bell.right, 1.5f)
         assertTrue("profile clipped at ${profile.right}, root ${root.right}", profile.right <= root.right + 1f)
         assertTrue(search.right <= root.right + 1f)
