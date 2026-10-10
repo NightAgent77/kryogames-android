@@ -171,7 +171,7 @@ class LibraryUiTest {
     fun handheldHeaderDoesNotSqueezeSearchOut() {
         compose.onNodeWithTag("search_button").assertIsDisplayed().assertWidthIsAtLeast(40.dp)
         compose.onNodeWithTag("view_mode").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Profile: Kidxpr").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Profile: Sign in").assertIsDisplayed()
         compose.onNodeWithTag("game_maze-ops").assertIsSelected()
     }
 
@@ -185,7 +185,7 @@ class LibraryUiTest {
     @Config(sdk = [35], qualifiers = "w960dp-h720dp-land-mdpi")
     fun classicOpenRailGapGrowsWhenThereIsRoom() {
         assertOpenRailSearchGap(atLeast = 24.dp)
-        compose.onNodeWithContentDescription("Profile: Kidxpr").assertWidthIsAtLeast(130.dp)
+        compose.onNodeWithContentDescription("Profile: Sign in").assertWidthIsAtLeast(130.dp)
     }
 
     @Test fun addMenuOffersALocalGameFolder() {
@@ -198,10 +198,10 @@ class LibraryUiTest {
     }
 
     @Test fun profileMenuAndSettingsFollowTheCursor() {
-        compose.onNodeWithContentDescription("Profile: Kidxpr").performClick()
-        compose.onNodeWithContentDescription("View profile").assertIsSelected()
+        compose.onNodeWithContentDescription("Profile: Sign in").performClick()
+        compose.onNodeWithContentDescription("Sign in", substring = false).assertIsSelected()
         controllerButton(KeyEvent.KEYCODE_DPAD_DOWN)
-        compose.onNodeWithContentDescription("Log out").assertIsSelected()
+        compose.onNodeWithContentDescription("Create account").assertIsSelected()
         compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
         controllerButton(KeyEvent.KEYCODE_BUTTON_B)
         compose.onNodeWithTag("menu_button").performClick()
@@ -248,10 +248,10 @@ class LibraryUiTest {
     }
 
     @Test fun menuShowsThisBuildVersionAndExit() {
-        compose.onNodeWithContentDescription("App version 0.0.9").assertDoesNotExist()
+        compose.onNodeWithContentDescription("App version 0.0.10").assertDoesNotExist()
         compose.onNodeWithTag("menu_button").performClick()
         compose.onNodeWithContentDescription("Home").assertIsDisplayed()
-        compose.onNodeWithContentDescription("App version 0.0.9").assertIsDisplayed()
+        compose.onNodeWithContentDescription("App version 0.0.10").assertIsDisplayed()
         compose.onNodeWithContentDescription("Exit").performClick()
         assertTrue(compose.activity.isFinishing)
     }
@@ -261,7 +261,7 @@ class LibraryUiTest {
         val switcher = compose.onNodeWithTag("section_switcher").fetchSemanticsNode().boundsInRoot
         val search = compose.onNodeWithTag("search_button").fetchSemanticsNode().boundsInRoot
         val bell = compose.onNodeWithContentDescription("Notifications").fetchSemanticsNode().boundsInRoot
-        val profile = compose.onNodeWithContentDescription("Profile: Kidxpr").fetchSemanticsNode().boundsInRoot
+        val profile = compose.onNodeWithContentDescription("Profile: Sign in").fetchSemanticsNode().boundsInRoot
         val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
         val gap = search.left - switcher.right
         val leftGap = switcher.left - menu.right

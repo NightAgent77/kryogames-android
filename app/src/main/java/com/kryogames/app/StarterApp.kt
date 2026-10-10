@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -60,6 +61,8 @@ private sealed interface Overlay {
     data class Message(val title: String, val body: String) : Overlay
     data object Browser : Overlay
     data object FilePrompt : Overlay
+    data class Auth(val mode: AuthMode) : Overlay
+    data object Profile : Overlay
 }
 
 /** Demo host. Replace its dataset/callbacks with your repository, not the layout. */
@@ -86,7 +89,36 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             .map { it.copy(favorite = it.id in favoriteIds) }
     }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
+    var account by remember { mutableStateOf(loadAccount(context)) }
+    var friends by remember { mutableStateOf(FriendsBoardState()) }
+    var accountBusy by remember { mutableStateOf(false) }
+    var accountError by remember { mutableStateOf<String?>(null) }
+    var friendSearch by remember { mutableStateOf<Job?>(null) }
     var awaitingControls by remember { mutableStateOf(false) }
+    fun persist(next: KryoAccount?) {
+        account = next
+        if (next == null) {
+            clearAccount(context)
+            friends = FriendsBoardState()
+        } else {
+            saveAccount(context, next)
+        }
+    }
+    LaunchedEffect(account?.id) {
+        val current = account ?: return@LaunchedEffect
+        if (catalogLoadSkipped()) return@LaunchedEffect
+        try {
+            val loaded = KryoBackend.loadFriends(current)
+            if (account?.id != loaded.account.id) return@LaunchedEffect
+            persist(loaded.account)
+            friends = loaded.state
+        } catch (expired: SessionExpired) {
+            persist(null)
+            overlay = Overlay.Message("Account", expired.message ?: "Sign in again.")
+        } catch (error: Exception) {
+            friends = friends.copy(error = error.message ?: "Couldn't load friends.")
+        }
+    }
     val addGame = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         val kept = runCatching {
@@ -215,6 +247,97 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
     fun stopDownload() {
         transferTicket?.stopped = true
     }
+    fun submitAuth(mode: AuthMode, email: String, password: String, username: String) {
+        if (accountBusy) return
+        accountBusy = true
+        accountError = null
+        scope.launch {
+            try {
+                val result = when (mode) {
+                    AuthMode.Forgot -> {
+                        val failure = KryoBackend.resetPassword(email)
+                        if (failure != null) AuthResult.Failed(failure)
+                        else AuthResult.ConfirmEmail("Password reset email sent. Open it on kryogames.com, then sign in here.")
+                    }
+                    AuthMode.SignUp -> KryoBackend.signUp(email, password, username)
+                    AuthMode.SignIn -> KryoBackend.signIn(email, password)
+                }
+                when (result) {
+                    is AuthResult.SignedIn -> {
+                        persist(result.account)
+                        accountError = null
+                        overlay = result.warning?.let { Overlay.Message("Profile", it) }
+                    }
+                    is AuthResult.ConfirmEmail -> accountError = result.message
+                    is AuthResult.Failed -> accountError = result.message
+                }
+            } catch (error: Exception) {
+                accountError = error.message ?: "Couldn't reach KryoGames."
+            } finally {
+                accountBusy = false
+            }
+        }
+    }
+    fun onFriendsQuery(raw: String) {
+        if (catalogLoadSkipped()) return
+        val current = account ?: return
+        friendSearch?.cancel()
+        friendSearch = scope.launch {
+            delay(250)
+            try {
+                if (raw.isBlank()) {
+                    val loaded = KryoBackend.loadFriends(current)
+                    persist(loaded.account)
+                    friends = loaded.state.copy(notice = friends.notice)
+                } else {
+                    friends = friends.copy(searching = true, error = null)
+                    val found = KryoBackend.searchProfiles(current, raw)
+                    persist(found.account)
+                    friends = friends.copy(searching = false, results = found.profiles, error = found.error)
+                }
+            } catch (expired: SessionExpired) {
+                persist(null)
+                overlay = Overlay.Message("Account", expired.message ?: "Sign in again.")
+            } catch (error: Exception) {
+                friends = friends.copy(searching = false, error = error.message ?: "Couldn't load friends.")
+            }
+        }
+    }
+    fun refreshFriends(current: KryoAccount, notice: String?) {
+        scope.launch {
+            try {
+                val loaded = KryoBackend.loadFriends(current)
+                persist(loaded.account)
+                friends = loaded.state.copy(notice = notice, results = if (notice != null) friends.results else loaded.state.results)
+            } catch (expired: SessionExpired) {
+                persist(null)
+                overlay = Overlay.Message("Account", expired.message ?: "Sign in again.")
+            } catch (error: Exception) {
+                friends = friends.copy(error = error.message ?: "Couldn't load friends.")
+            }
+        }
+    }
+    fun runFriend(block: suspend (KryoAccount) -> ActionResult?) {
+        val current = account ?: return
+        if (accountBusy) return
+        accountBusy = true
+        scope.launch {
+            try {
+                val result = block(current)
+                if (result != null) {
+                    persist(result.account)
+                    if (result.error != null) friends = friends.copy(error = result.error, notice = null)
+                }
+            } catch (expired: SessionExpired) {
+                persist(null)
+                overlay = Overlay.Message("Account", expired.message ?: "Sign in again.")
+            } catch (error: Exception) {
+                friends = friends.copy(error = error.message ?: "Couldn't update friends.")
+            } finally {
+                accountBusy = false
+            }
+        }
+    }
     BackHandler(enabled = overlay != null) { overlay = null }
     Box(Modifier.fillMaxSize()) {
         LibraryScreen(games = games, discoverGames = storeGames, controllerActions = controllerActions, modalOpen = overlay != null,
@@ -234,7 +357,43 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             onPlay = ::play,
             onOptions = { overlay = Overlay.Options(it.id) },
             onNotifications = { overlay = Overlay.Message("Notifications", "You're all caught up. Connect this action to your notifications repository.") },
-            onProfile = { overlay = Overlay.Message("Kidxpr", "Your profile area. Replace the demo name and avatar with your authenticated user.") },
+            onProfile = {
+                accountError = null
+                overlay = if (account == null) Overlay.Auth(AuthMode.SignIn) else Overlay.Profile
+            },
+            username = account?.displayName() ?: "Sign in",
+            signedIn = account != null,
+            avatar = account?.avatar,
+            friends = friends,
+            onFriendsQuery = ::onFriendsQuery,
+            onFriendAdd = { profile ->
+                runFriend { current ->
+                    val result = KryoBackend.sendFriendRequest(current, profile.id)
+                    if (result.error == null) refreshFriends(result.account, "Request sent to ${profileLabel(profile.username)}.")
+                    result
+                }
+            },
+            onFriendAccept = { request ->
+                runFriend { current ->
+                    val result = KryoBackend.respondToRequest(current, request.friendshipId, accept = true)
+                    if (result.error == null) refreshFriends(result.account, "Friend request accepted.")
+                    result
+                }
+            },
+            onFriendDecline = { request ->
+                runFriend { current ->
+                    val result = KryoBackend.respondToRequest(current, request.friendshipId, accept = false)
+                    if (result.error == null) refreshFriends(result.account, "Request declined.")
+                    result
+                }
+            },
+            onFriendRemove = { entry ->
+                runFriend { current ->
+                    val result = KryoBackend.removeFriend(current, entry.friendshipId)
+                    if (result.error == null) refreshFriends(result.account, "${profileLabel(entry.profile.username)} removed from friends.")
+                    result
+                }
+            },
             onToggleFavorite = { game ->
                 favoriteIds = if (game.favorite) favoriteIds - game.id else favoriteIds + game.id
             },
@@ -255,9 +414,18 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
             },
             onExit = { activity?.finishAndRemoveTask() },
             onSidebarAction = { name ->
-                overlay = when (name) {
-                    "Log out" -> Overlay.Message("Log out", "Sign-in isn't connected on this device yet.")
-                    else -> Overlay.Message(name, "This section is ready for a later update.")
+                when (name) {
+                    "Log out" -> {
+                        val current = account
+                        persist(null)
+                        overlay = null
+                        if (current != null) scope.launch { runCatching { KryoBackend.signOut(current) } }
+                    }
+                    "Create account" -> {
+                        accountError = null
+                        overlay = Overlay.Auth(AuthMode.SignUp)
+                    }
+                    else -> overlay = Overlay.Message(name, "This section is ready for a later update.")
                 }
             })
         overlay?.let { current ->
@@ -280,6 +448,54 @@ fun StarterApp(controllerActions: Flow<ControllerAction>) {
                     onChoose = ::importChosenFolder,
                     onDismiss = { overlay = null },
                 )
+                is Overlay.Auth -> AuthOverlay(
+                    mode = current.mode,
+                    busy = accountBusy,
+                    error = accountError,
+                    onMode = { overlay = Overlay.Auth(it); accountError = null },
+                    onSubmit = { email, password, username -> submitAuth(current.mode, email, password, username) },
+                    onDismiss = { overlay = null; accountError = null },
+                )
+                Overlay.Profile -> account?.let { currentAccount ->
+                    ProfileOverlay(
+                        account = currentAccount,
+                        busy = accountBusy,
+                        error = accountError,
+                        onSave = save@{ draft ->
+                            if (accountBusy) return@save
+                            accountBusy = true
+                            accountError = null
+                            scope.launch {
+                                try {
+                                    when (val result = KryoBackend.updateAccount(currentAccount, draft)) {
+                                        is AuthResult.SignedIn -> {
+                                            persist(result.account)
+                                            overlay = result.warning?.let { Overlay.Message("Profile", it) }
+                                            accountError = null
+                                        }
+                                        is AuthResult.Failed -> accountError = result.message
+                                        is AuthResult.ConfirmEmail -> accountError = result.message
+                                    }
+                                } catch (error: Exception) {
+                                    accountError = error.message ?: "Couldn't update your profile."
+                                } finally {
+                                    accountBusy = false
+                                }
+                            }
+                        },
+                        onResetPassword = reset@{
+                            if (accountBusy) return@reset
+                            accountBusy = true
+                            scope.launch {
+                                val failure = runCatching { KryoBackend.resetPassword(currentAccount.email) }.getOrElse { it.message }
+                                accountBusy = false
+                                if (failure != null) accountError = failure
+                                else overlay = Overlay.Message("Reset password", "Check ${currentAccount.email} for a link to kryogames.com.")
+                            }
+                        },
+                        onDismiss = { overlay = null; accountError = null },
+                    )
+                }
                 is Overlay.Options -> {
                     val game = games.first { it.id == current.id }
                     ModalPanel(game.title, if (game.platform == GamePlatform.WEB) "Web game" else "Android game",

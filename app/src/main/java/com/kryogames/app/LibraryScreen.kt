@@ -225,6 +225,14 @@ fun LibraryScreen(
     onOpenDiscover: () -> Unit = {},
     onAddGame: () -> Unit = {},
     onExit: () -> Unit = {},
+    signedIn: Boolean = true,
+    avatar: String? = null,
+    friends: FriendsBoardState = FriendsBoardState(),
+    onFriendsQuery: (String) -> Unit = {},
+    onFriendAdd: (PlayerProfile) -> Unit = {},
+    onFriendAccept: (FriendRequest) -> Unit = {},
+    onFriendDecline: (FriendRequest) -> Unit = {},
+    onFriendRemove: (FriendEntry) -> Unit = {},
 ) {
     var sidebarOpen by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -264,6 +272,10 @@ fun LibraryScreen(
     val cardFocus = remember(ids) { ids.associateWith { FocusRequester() } }
     val menuFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
+    val friendsAnchor = remember { FocusRequester() }
+    LaunchedEffect(section, query) {
+        if (section == "Friends") onFriendsQuery(query)
+    }
     val gridState = rememberLazyGridState()
     val keyboard = LocalSoftwareKeyboardController.current
     val selectedGame = games.firstOrNull { it.id == lastFocusedGameId } ?: visible.firstOrNull()
@@ -365,7 +377,10 @@ fun LibraryScreen(
         if (next == "Favorites") filterName = LibraryFilter.FAVORITES.name
         else if (next == "Library" || next == "Discover") filterName = LibraryFilter.ALL.name
         if (next == "Discover") onOpenDiscover()
-        if (next == "Friends" && slotName == ShellSlot.GRID.name) slotName = ShellSlot.LIBRARY.name
+        if (next == "Friends") {
+            query = ""
+            if (slotName == ShellSlot.GRID.name) slotName = ShellSlot.LIBRARY.name
+        }
     }
     fun openDownloads() {
         section = "Downloads"
@@ -610,7 +625,7 @@ fun LibraryScreen(
                 }
                 else -> {
                     profileMenuOpen = false
-                    onSidebarAction("Log out")
+                    onSidebarAction(if (signedIn) "Log out" else "Create account")
                 }
             }
             return true
@@ -874,7 +889,9 @@ fun LibraryScreen(
                         }
                         layoutColumns[0] = columns
                         resolvedAspect.value = resolved
+                        val friendsVisible = section == "Friends" && !settingsOpen && !showingInfo
                         val libraryDown = when {
+                            friendsVisible -> friendsAnchor
                             section == "Friends" -> menuFocus
                             visible.isNotEmpty() -> cardFocus.getValue(visible.first().id)
                             offersAddSlot -> addFocus
@@ -905,6 +922,7 @@ fun LibraryScreen(
                                 section = section,
                                 query = query,
                                 username = username,
+                                avatar = avatar,
                                 searchPhase = searchPhase,
                                 searchFocus = searchFocus,
                                 searchButtonFocus = searchButtonFocus,
@@ -1028,7 +1046,19 @@ fun LibraryScreen(
                                     enter = fadeIn(motionIn()) + slideInHorizontally(motionIn()) { it / 16 },
                                     exit = fadeOut(motionOut()) + slideOutHorizontally(motionOut()) { it / 16 },
                                 ) {
-                                    FriendsPane(m)
+                                    FriendsBoard(
+                                        m = m,
+                                        signedIn = signedIn,
+                                        state = friends,
+                                        query = query,
+                                        anchor = friendsAnchor,
+                                        onSignIn = onProfile,
+                                        onOpenSearch = { toggleSearch() },
+                                        onAdd = onFriendAdd,
+                                        onAccept = onFriendAccept,
+                                        onDecline = onFriendDecline,
+                                        onRemove = onFriendRemove,
+                                    )
                                 }
                                 OverlayVisibility(
                                     visible = settingsOpen && !showingInfo,
@@ -1158,13 +1188,14 @@ fun LibraryScreen(
                 visible = profileMenuOpen,
                 anchor = anchors["profile"],
                 selectedRow = menuIndex,
+                signedIn = signedIn,
                 onViewProfile = {
                     profileMenuOpen = false
                     onProfile()
                 },
                 onLogOut = {
                     profileMenuOpen = false
-                    onSidebarAction("Log out")
+                    onSidebarAction(if (signedIn) "Log out" else "Create account")
                 },
                 onDismiss = { profileMenuOpen = false },
             )
@@ -1282,6 +1313,7 @@ private fun Header(
     section: String,
     query: String,
     username: String,
+    avatar: String?,
     searchPhase: SearchPhase,
     searchFocus: FocusRequester,
     searchButtonFocus: FocusRequester,
@@ -1399,11 +1431,9 @@ private fun Header(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(row.d(6)),
             ) {
-                Image(
-                    painterResource(R.drawable.profile_avatar),
-                    null,
+                AccountAvatar(
+                    avatar,
                     Modifier.size(row.d(36)).clip(RoundedCornerShape(row.d(5))),
-                    contentScale = ContentScale.Crop,
                 )
                 Text(
                     username,
@@ -1478,6 +1508,7 @@ private fun Header(
                     down = downTarget
                 },
                 highlighted = searchArmed,
+                placeholder = if (section == "Friends") "Search usernames..." else "Search games...",
             )
         }
     }
@@ -1552,6 +1583,7 @@ private fun SearchField(
     m: Metrics,
     modifier: Modifier,
     highlighted: Boolean,
+    placeholder: String,
 ) {
     var focused by remember { mutableStateOf(false) }
     val frosted = LocalFrosted.current
@@ -1582,7 +1614,7 @@ private fun SearchField(
             ) {
                 Icon(Icons.Outlined.Search, "Search", tint = KryoColors.Muted, modifier = Modifier.size(m.d(20)))
                 Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) Text("Search games...", color = KryoColors.Muted, fontSize = m.t(14), maxLines = 1)
+                    if (query.isEmpty()) Text(placeholder, color = KryoColors.Muted, fontSize = m.t(14), maxLines = 1)
                     inner()
                 }
             }
@@ -1756,6 +1788,7 @@ internal fun FocusBox(
     boxed: Boolean = true,
     trackFocus: Boolean = true,
     highlighted: Boolean = false,
+    tone: Color = Color.Unspecified,
     onClick: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -1782,6 +1815,7 @@ internal fun FocusBox(
     )
     val fill by androidx.compose.animation.animateColorAsState(
         when {
+            tone != Color.Unspecified -> tone
             marked -> KryoColors.Accent.copy(alpha = 0.22f)
             frosted && showFill -> Color.White.copy(alpha = 0.16f)
             showFill -> KryoColors.Surface
@@ -2011,16 +2045,19 @@ private fun GameInfoView(
 ) {
     val gap = if (classic) m.d(16) else m.d(22)
     Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) {
-        BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = m.d(8))) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val topGap = maxHeight * 0.04f
+            val bodyH = maxHeight - topGap
             val ratio = 0.94f
             val sideBySide = maxWidth >= 480.dp
             val maxArtW = min(maxWidth.value * 0.42f, (maxWidth - gap - m.d(220)).coerceAtLeast(m.d(150)).value)
-            val maxArtH = if (sideBySide) maxHeight.value else maxHeight.value * 0.52f
+            val maxArtH = if (sideBySide) bodyH.value else bodyH.value * 0.52f
             val artW = min(maxArtW, maxArtH * ratio).dp
             val artH = (artW.value / ratio).dp
+            val body = Modifier.fillMaxSize().padding(top = topGap).clipToBounds()
             if (sideBySide) {
                 Row(
-                    Modifier.fillMaxSize().clipToBounds(),
+                    body,
                     horizontalArrangement = Arrangement.spacedBy(gap),
                     verticalAlignment = Alignment.Top,
                 ) {
@@ -2029,7 +2066,7 @@ private fun GameInfoView(
                 }
             } else {
                 Column(
-                    Modifier.fillMaxSize().clipToBounds(),
+                    body,
                     verticalArrangement = Arrangement.spacedBy(gap),
                     horizontalAlignment = Alignment.Start,
                 ) {
@@ -2066,20 +2103,35 @@ private fun GameInfoDetails(
     Column(modifier, verticalArrangement = Arrangement.spacedBy(m.d(12))) {
         GameInfoCopy(game, m, classic, Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(m.d(12)), verticalAlignment = Alignment.CenterVertically) {
-            FocusBox(
-                Modifier.size(m.d(48)).testTag("info_play"),
-                if (game.installed) "Play ${game.title}" else "Install ${game.title}",
-                outlined = true,
-                trackFocus = false,
-                highlighted = selection == 0,
-                onClick = onPlay,
-            ) {
-                Icon(
-                    if (game.installed) Icons.Outlined.PlayArrow else Icons.Outlined.FileDownload,
-                    null,
-                    tint = Color.White,
-                    modifier = Modifier.size(m.d(22)),
-                )
+            if (game.installed) {
+                FocusBox(
+                    Modifier.size(m.d(48)).testTag("info_play"),
+                    "Play ${game.title}",
+                    outlined = true,
+                    trackFocus = false,
+                    highlighted = selection == 0,
+                    onClick = onPlay,
+                ) {
+                    Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(m.d(22)))
+                }
+            } else {
+                FocusBox(
+                    Modifier.height(m.d(48)).testTag("info_play"),
+                    "Install ${game.title}",
+                    outlined = true,
+                    trackFocus = false,
+                    highlighted = selection == 0,
+                    tone = Color(0xFF8ED4F8),
+                    onClick = onPlay,
+                ) {
+                    Text(
+                        "Install",
+                        Modifier.padding(horizontal = m.d(18)),
+                        color = Color(0xFF08324A),
+                        fontSize = m.t(15),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
             FocusBox(
                 Modifier.size(m.d(48)).testTag("info_favorite"),
@@ -2143,21 +2195,6 @@ private fun GameInfoCopy(
                     color = Color.White,
                     fontSize = m.t(12),
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun FriendsPane(m: Metrics) {
-    Column(Modifier.fillMaxSize().padding(top = m.d(8))) {
-        Text("Friends", color = KryoColors.Text, fontSize = m.t(32), fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(m.d(4)))
-        Text("See who's around and invite them to play.", color = KryoColors.Muted, fontSize = m.t(14))
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(m.d(10))) {
-                Icon(Icons.Outlined.Group, null, tint = KryoColors.Muted, modifier = Modifier.size(m.d(36)))
-                Text("No friends yet.", color = KryoColors.Muted, fontSize = m.t(15))
             }
         }
     }
@@ -2234,6 +2271,7 @@ private fun ProfileMenuLayer(
     visible: Boolean,
     anchor: Rect?,
     selectedRow: Int,
+    signedIn: Boolean,
     onViewProfile: () -> Unit,
     onLogOut: () -> Unit,
     onDismiss: () -> Unit,
@@ -2249,7 +2287,7 @@ private fun ProfileMenuLayer(
             },
         )
     }
-    val menuWidth = 152.dp
+    val menuWidth = if (signedIn) 152.dp else 176.dp
     val x = if (anchor == null) 0f else with(density) { (anchor.right - menuWidth.toPx()).coerceAtLeast(8.dp.toPx()) }
     val y = if (anchor == null) 0f else with(density) { anchor.bottom + 8.dp.toPx() }
     AnimatedVisibility(
@@ -2275,8 +2313,8 @@ private fun ProfileMenuLayer(
         ) {
             data class RowItem(val label: String, val focus: FocusRequester, val up: FocusRequester, val down: FocusRequester, val action: () -> Unit)
             listOf(
-                RowItem("View profile", viewProfile, viewProfile, logOut, onViewProfile),
-                RowItem("Log out", logOut, viewProfile, logOut, onLogOut),
+                RowItem(if (signedIn) "View profile" else "Sign in", viewProfile, viewProfile, logOut, onViewProfile),
+                RowItem(if (signedIn) "Log out" else "Create account", logOut, viewProfile, logOut, onLogOut),
             ).forEachIndexed { index, item ->
                 FocusBox(
                     Modifier.fillMaxWidth().height(40.dp).focusRequester(item.focus).focusProperties {
